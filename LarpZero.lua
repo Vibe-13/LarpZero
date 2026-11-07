@@ -1,36 +1,51 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
-local LarpZeroLockRoot=game:GetService("CoreGui")
-local sharedLock=LarpZeroLockRoot:FindFirstChild("LarpZeroStartupLock")
-if sharedLock then
-    local menu=sharedLock:FindFirstChild("Menu")
-    if menu and menu.Value and menu.Value.Parent then return end
-    local started=sharedLock:GetAttribute("Started")
-    if sharedLock:GetAttribute("Loading") and type(started)=="number" and os.clock()-started<90 then return end
-    sharedLock:Destroy()
-end
-local LarpZeroUIRoot=type(gethui)=="function" and gethui() or game:GetService("CoreGui")
-for _,gui in ipairs(LarpZeroUIRoot:GetChildren()) do
-    if gui:GetAttribute("LarpZeroMenu") then return end
-    if gui.Name=="Obsidian" then
-        for _,label in ipairs(gui:GetDescendants()) do
-            if label:IsA("TextLabel") and(label.Text=="Larp Zero"or label.Text:sub(1,12)=="Larp Zero | ")then return end
-        end
+if game.GameId~=985731078 then return end
+local CanResume=(function()
+-- One-use handoff within World Zero. No persistent file authorizes startup.
+return function(consume)
+    if game.GameId~=985731078 then return false end
+    local service=game:GetService("TeleportService")
+    local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
+    if not ok or type(ticket)~="table"or ticket.Version~=4 or ticket.Game~=985731078
+        or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
+        or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
+    local age=os.time()-ticket.At
+    if age<0 or age>300 then return false end
+    if consume then
+        local cleared=pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",false)
+        if not cleared then return false end
+        getgenv().LarpZeroResumeSettings=true
     end
+    return true
 end
-local prior=getgenv().LarpZeroInstance
-local sameServer=prior and prior.Place==game.PlaceId and prior.Server==game.JobId
-local oldGui=prior and prior.Library and prior.Library.ScreenGui
-local liveMenu=oldGui and oldGui.Parent~=nil and not prior.Library.Unloaded
-local recentStart=prior and prior.Loading and os.clock()-(prior.Started or 0)<90
-if sameServer and (recentStart or liveMenu) then return end
-local LarpZeroStartupLock=Instance.new("Folder")
-LarpZeroStartupLock.Name="LarpZeroStartupLock"
-LarpZeroStartupLock:SetAttribute("Started",os.clock())
-LarpZeroStartupLock:SetAttribute("Loading",true)
-LarpZeroStartupLock.Parent=LarpZeroLockRoot
-local LarpZeroInstance={Loading=true,Place=game.PlaceId,Server=game.JobId,Started=os.clock()}
-getgenv().LarpZeroInstance=LarpZeroInstance
-if type(writefile)=="function" then pcall(function()writefile("LarpZeroRuntime.lua",[====[
+
+end)()
+CanResume(true) -- Restore a valid hop, but never block normal execution.
+local LarpZeroCarryTemplate=[====[
+local LarpZeroCarryTemplate=__LARP_CARRY_TEMPLATE__
+if not game:IsLoaded() then game.Loaded:Wait() end
+if game.GameId~=985731078 then return end
+local CanResume=(function()
+-- One-use handoff within World Zero. No persistent file authorizes startup.
+return function(consume)
+    if game.GameId~=985731078 then return false end
+    local service=game:GetService("TeleportService")
+    local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
+    if not ok or type(ticket)~="table"or ticket.Version~=4 or ticket.Game~=985731078
+        or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
+        or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
+    local age=os.time()-ticket.At
+    if age<0 or age>300 then return false end
+    if consume then
+        local cleared=pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",false)
+        if not cleared then return false end
+        getgenv().LarpZeroResumeSettings=true
+    end
+    return true
+end
+
+end)()
+if not CanResume(true)then return end
 if not game:IsLoaded() then game.Loaded:Wait() end
 local LarpZeroLockRoot=game:GetService("CoreGui")
 local sharedLock=LarpZeroLockRoot:FindFirstChild("LarpZeroStartupLock")
@@ -12205,6 +12220,7 @@ local RunService = ReturnService("RunService")
 local MarketplaceService = ReturnService("MarketplaceService")
 local TeleportService = ReturnService("TeleportService")
 local TweenService = ReturnService("TweenService")
+local UserInputService = ReturnService("UserInputService")
 
 -- || RETURN CHILD ||
 SetGlobal("getting ReplicatedStorage paths")
@@ -13265,7 +13281,7 @@ local function RestartDungeon(RestartBypass)
     if IsTower then
         Difficulty = nil
     end
-    if GetLives() == 0 then
+    if IsDungeon and GetLives() == 0 then
         ReplayDungeonLoop(ISV.MissionId, Difficulty)
     end
     if SV.DoingGuildDungeon and not SV.IsNightmareDungeon then
@@ -14584,8 +14600,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.07-r14")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","7c31c1ffdd21")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.07-r19")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","63190e63bc3f")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -14615,8 +14631,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | r14",
-    Footer = "Build 2026.11.07-r14",
+    Title = "Larp Zero | r19",
+    Footer = "Build 2026.11.07-r19",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -16635,7 +16651,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.07-r14 [7c31c1ffdd21]",true)
+cleanSettings:AddLabel("Build: 2026.11.07-r19 [63190e63bc3f]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -16675,37 +16691,44 @@ task.spawn(function()
     if not ScriptUnloaded and not KillSwitch then Library:Notify("Waiting for game data. Saved profiles are available in Settings.",5) end
 end)
 
--- Only the audited local cache is carried; both startup paths share one lock.
+-- Carry the complete readable script; no companion files are required.
 do
-    local pending="LarpZeroProfiles/resume_pending.txt"
-    pcall(function()
-        if type(isfile)=="function"and isfile(pending)and readfile(pending)=="1"then
-            getgenv().LarpZeroResumeSettings=true
-            if type(delfile)=="function"then delfile(pending)else writefile(pending,"")end
-        end
-    end)
+    local service=game:GetService("TeleportService")
     local queue=queue_on_teleport or queueonteleport
     if not queue and type(syn)=="table"then queue=syn.queue_on_teleport end
-    local armed=getgenv().LarpZeroQueueArmed==true
+    local armed=Library.CarryOverArmed==true
     if type(queue)=="function"and not armed then
-        if type(loadfile)=="function"then
-            armed=pcall(queue,'local run=loadfile("LarpZeroRuntime.lua") if type(run)=="function"then run()end')
-        elseif type(readfile)=="function"then
-            local ok,source=pcall(readfile,"LarpZeroRuntime.lua")
-            if ok and type(source)=="string"and #source>=1000 then armed=pcall(queue,source)end
+        if type(LarpZeroCarryTemplate)=="string"then
+            local equals="===="
+            while LarpZeroCarryTemplate:find("]"..equals.."]",1,true)do equals..="="end
+            local literal="["..equals.."[\n"..LarpZeroCarryTemplate.."]"..equals.."]"
+            local source,replaced=LarpZeroCarryTemplate:gsub("__LARP_CARRY_TEMPLATE__",function()return literal end,1)
+            if replaced==1 then armed=pcall(queue,source)end
         end
         if armed then getgenv().LarpZeroQueueArmed=true end
     end
     Library.CarryOverArmed=armed==true
-    ConnectionTable.LarpZeroCarryOver=LocalPlayer.OnTeleport:Connect(function(state)
-        if state~=Enum.TeleportState.Started then return end
-        pcall(function()
-            Library.PrepareTeleportSettings()
-            writefile(pending,"1")
-        end)
+    ConnectionTable.LarpZeroCarryOver=LocalPlayer.OnTeleport:Connect(function(state,placeId)
+        if state==Enum.TeleportState.Failed then
+            pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",false)
+            Library.CarrySettingsSaved=false
+            return
+        end
+        if state~=Enum.TeleportState.Started
+            and state~=Enum.TeleportState.RequestedFromServer
+            and state~=Enum.TeleportState.WaitingForServer
+            and state~=Enum.TeleportState.InProgress then return end
+        if type(placeId)~="number"or placeId<=0 then return end
+        pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
+            Version=4,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+        })
+        -- Saving preferences must not prevent the native handoff being issued.
+        if not Library.CarrySettingsSaved and type(Library.PrepareTeleportSettings)=="function"then
+            Library.CarrySettingsSaved=pcall(Library.PrepareTeleportSettings)
+        end
     end)
-    cleanSettings:AddLabel(armed and "Carry-over armed / duplicate startup protected"
-        or "Carry-over unavailable: keep this script in autoexec",true)
+    cleanSettings:AddLabel(armed and "World Zero hops only / duplicate startup protected"
+        or "World Zero hop carry-over unavailable in this executor",true)
 end
 
 if SV.RefreshSafeMode then SV.RefreshSafeMode(SV.SafeMode) end
@@ -17659,7 +17682,7 @@ if IsDungeon then
                     end
                 end)
             end
-            if GetLives() == 0 then
+            if IsDungeon and GetLives() == 0 then
                 RestartDungeon(true)
             end
         else
@@ -19111,7 +19134,7 @@ end
 --                    return
 --                end
 --                AlreadyCheckingLives = true
---                if GetLives() == 0 then
+--                if IsDungeon and GetLives() == 0 then
 --                    IsDead = true
 --                    LoadingStep(true)
 --                    RejoinLastDungeon(false)
@@ -19412,12 +19435,44 @@ if IsWorld or IsDungeon then
     end)
 end
 
-if GetLives() == 0 then
+if IsDungeon and GetLives() == 0 then
     RestartDungeon()
 end
 
 SetGlobal("end")
-]====])end)end
+]====]
+if not game:IsLoaded() then game.Loaded:Wait() end
+local LarpZeroLockRoot=game:GetService("CoreGui")
+local sharedLock=LarpZeroLockRoot:FindFirstChild("LarpZeroStartupLock")
+if sharedLock then
+    local menu=sharedLock:FindFirstChild("Menu")
+    if menu and menu.Value and menu.Value.Parent then return end
+    local started=sharedLock:GetAttribute("Started")
+    if sharedLock:GetAttribute("Loading") and type(started)=="number" and os.clock()-started<90 then return end
+    sharedLock:Destroy()
+end
+local LarpZeroUIRoot=type(gethui)=="function" and gethui() or game:GetService("CoreGui")
+for _,gui in ipairs(LarpZeroUIRoot:GetChildren()) do
+    if gui:GetAttribute("LarpZeroMenu") then return end
+    if gui.Name=="Obsidian" then
+        for _,label in ipairs(gui:GetDescendants()) do
+            if label:IsA("TextLabel") and(label.Text=="Larp Zero"or label.Text:sub(1,12)=="Larp Zero | ")then return end
+        end
+    end
+end
+local prior=getgenv().LarpZeroInstance
+local sameServer=prior and prior.Place==game.PlaceId and prior.Server==game.JobId
+local oldGui=prior and prior.Library and prior.Library.ScreenGui
+local liveMenu=oldGui and oldGui.Parent~=nil and not prior.Library.Unloaded
+local recentStart=prior and prior.Loading and os.clock()-(prior.Started or 0)<90
+if sameServer and (recentStart or liveMenu) then return end
+local LarpZeroStartupLock=Instance.new("Folder")
+LarpZeroStartupLock.Name="LarpZeroStartupLock"
+LarpZeroStartupLock:SetAttribute("Started",os.clock())
+LarpZeroStartupLock:SetAttribute("Loading",true)
+LarpZeroStartupLock.Parent=LarpZeroLockRoot
+local LarpZeroInstance={Loading=true,Place=game.PlaceId,Server=game.JobId,Started=os.clock()}
+getgenv().LarpZeroInstance=LarpZeroInstance
 local InstallLocalProfiles=(function()
 -- Local settings only. No reporting or runtime downloads.
 return function(library,tab)
@@ -31560,6 +31615,7 @@ local RunService = ReturnService("RunService")
 local MarketplaceService = ReturnService("MarketplaceService")
 local TeleportService = ReturnService("TeleportService")
 local TweenService = ReturnService("TweenService")
+local UserInputService = ReturnService("UserInputService")
 
 -- || RETURN CHILD ||
 SetGlobal("getting ReplicatedStorage paths")
@@ -32620,7 +32676,7 @@ local function RestartDungeon(RestartBypass)
     if IsTower then
         Difficulty = nil
     end
-    if GetLives() == 0 then
+    if IsDungeon and GetLives() == 0 then
         ReplayDungeonLoop(ISV.MissionId, Difficulty)
     end
     if SV.DoingGuildDungeon and not SV.IsNightmareDungeon then
@@ -33939,8 +33995,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.07-r14")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","7c31c1ffdd21")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.07-r19")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","63190e63bc3f")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -33970,8 +34026,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | r14",
-    Footer = "Build 2026.11.07-r14",
+    Title = "Larp Zero | r19",
+    Footer = "Build 2026.11.07-r19",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -35990,7 +36046,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.07-r14 [7c31c1ffdd21]",true)
+cleanSettings:AddLabel("Build: 2026.11.07-r19 [63190e63bc3f]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -36030,37 +36086,44 @@ task.spawn(function()
     if not ScriptUnloaded and not KillSwitch then Library:Notify("Waiting for game data. Saved profiles are available in Settings.",5) end
 end)
 
--- Only the audited local cache is carried; both startup paths share one lock.
+-- Carry the complete readable script; no companion files are required.
 do
-    local pending="LarpZeroProfiles/resume_pending.txt"
-    pcall(function()
-        if type(isfile)=="function"and isfile(pending)and readfile(pending)=="1"then
-            getgenv().LarpZeroResumeSettings=true
-            if type(delfile)=="function"then delfile(pending)else writefile(pending,"")end
-        end
-    end)
+    local service=game:GetService("TeleportService")
     local queue=queue_on_teleport or queueonteleport
     if not queue and type(syn)=="table"then queue=syn.queue_on_teleport end
-    local armed=getgenv().LarpZeroQueueArmed==true
+    local armed=Library.CarryOverArmed==true
     if type(queue)=="function"and not armed then
-        if type(loadfile)=="function"then
-            armed=pcall(queue,'local run=loadfile("LarpZeroRuntime.lua") if type(run)=="function"then run()end')
-        elseif type(readfile)=="function"then
-            local ok,source=pcall(readfile,"LarpZeroRuntime.lua")
-            if ok and type(source)=="string"and #source>=1000 then armed=pcall(queue,source)end
+        if type(LarpZeroCarryTemplate)=="string"then
+            local equals="===="
+            while LarpZeroCarryTemplate:find("]"..equals.."]",1,true)do equals..="="end
+            local literal="["..equals.."[\n"..LarpZeroCarryTemplate.."]"..equals.."]"
+            local source,replaced=LarpZeroCarryTemplate:gsub("__LARP_CARRY_TEMPLATE__",function()return literal end,1)
+            if replaced==1 then armed=pcall(queue,source)end
         end
         if armed then getgenv().LarpZeroQueueArmed=true end
     end
     Library.CarryOverArmed=armed==true
-    ConnectionTable.LarpZeroCarryOver=LocalPlayer.OnTeleport:Connect(function(state)
-        if state~=Enum.TeleportState.Started then return end
-        pcall(function()
-            Library.PrepareTeleportSettings()
-            writefile(pending,"1")
-        end)
+    ConnectionTable.LarpZeroCarryOver=LocalPlayer.OnTeleport:Connect(function(state,placeId)
+        if state==Enum.TeleportState.Failed then
+            pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",false)
+            Library.CarrySettingsSaved=false
+            return
+        end
+        if state~=Enum.TeleportState.Started
+            and state~=Enum.TeleportState.RequestedFromServer
+            and state~=Enum.TeleportState.WaitingForServer
+            and state~=Enum.TeleportState.InProgress then return end
+        if type(placeId)~="number"or placeId<=0 then return end
+        pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
+            Version=4,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+        })
+        -- Saving preferences must not prevent the native handoff being issued.
+        if not Library.CarrySettingsSaved and type(Library.PrepareTeleportSettings)=="function"then
+            Library.CarrySettingsSaved=pcall(Library.PrepareTeleportSettings)
+        end
     end)
-    cleanSettings:AddLabel(armed and "Carry-over armed / duplicate startup protected"
-        or "Carry-over unavailable: keep this script in autoexec",true)
+    cleanSettings:AddLabel(armed and "World Zero hops only / duplicate startup protected"
+        or "World Zero hop carry-over unavailable in this executor",true)
 end
 
 if SV.RefreshSafeMode then SV.RefreshSafeMode(SV.SafeMode) end
@@ -37014,7 +37077,7 @@ if IsDungeon then
                     end
                 end)
             end
-            if GetLives() == 0 then
+            if IsDungeon and GetLives() == 0 then
                 RestartDungeon(true)
             end
         else
@@ -38466,7 +38529,7 @@ end
 --                    return
 --                end
 --                AlreadyCheckingLives = true
---                if GetLives() == 0 then
+--                if IsDungeon and GetLives() == 0 then
 --                    IsDead = true
 --                    LoadingStep(true)
 --                    RejoinLastDungeon(false)
@@ -38767,7 +38830,7 @@ if IsWorld or IsDungeon then
     end)
 end
 
-if GetLives() == 0 then
+if IsDungeon and GetLives() == 0 then
     RestartDungeon()
 end
 
