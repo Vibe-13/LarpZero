@@ -6,7 +6,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=37 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=43 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -31,7 +31,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=37 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=43 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -15000,8 +15000,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r27-rc3")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","f7d1fa2daafc")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r28-rc5")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","424899b18728")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -15031,8 +15031,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | rc3",
-    Footer = "Build 2026.11.11-r27-rc3",
+    Title = "Larp Zero | rc5",
+    Footer = "Build 2026.11.11-r28-rc5",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -16989,6 +16989,7 @@ CreateToggles({
     { "DeathEffectToggle", Text = "Remove death effects", Tooltip = "Prevents all death effects from being rendered", Tab = FirstTab },
     { "KnockdownToggle", Text = "Disable knockdown", Tooltip = "Prevents the knockdown status from working (everyone can see this if they look at your statuses)", Tab = FirstTab },
     { "ShowEndTimeToggle", Text = "Display end time", Tooltip = "Show the dungeons clear time when finished", Tab = FirstTab },
+    { "AnonymousModeToggle", Text = "Anonymous mode", Tooltip = "Local-only fixed armor-free avatar; no equipment skins or cosmetic effects. Restores your appearance when off. Other players see no change.", Tab = FirstTab },
     { "WaystoneToggle", Text = "Closest waystone", Tooltip = "Hide the icon for the closest waystone", Tab = SecondTab },
     { "MissionObjectiveToggle", Text = "Mission objective", Tooltip = "Hide the text on your screen telling you what to do", Tab = SecondTab, AttachedFunction = ToggleMenu, FunctionValue = "MissionObjective" },
     { "BossBarToggle", Text = "Boss bar", Tooltip = "Hide boss bars on your screen", Tab = SecondTab, AttachedFunction = ToggleMenu, FunctionValue = "BossHealthbar" },
@@ -17059,7 +17060,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.11-r27-rc3 [f7d1fa2daafc]",true)
+cleanSettings:AddLabel("Build: 2026.11.11-r28-rc5 [424899b18728]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -17136,7 +17137,7 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=37,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=43,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
         -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
@@ -18653,6 +18654,307 @@ if IsDungeon then
             SV.ShowTime = nil
         end
     end)
+end
+
+do
+    local install=(function()
+-- Local presentation only: no outfit/equipment, rig, physics, or network changes.
+return function(toggle,deps)
+    local enabled,stopped=false,false
+    local character,view
+    local snapshots,copies={},{}
+    local alpha,hair={},{}
+    local external={}
+    local nextEffects=0
+    local wingsState=nil
+    local connections={}
+    local body={Head=true,Face=true,EyeFace=true,MarkingFace=true,LeftHandClosed=true,RightHandClosed=true,UpperTorso=true,LowerTorso=true,Torso=true,
+        LeftUpperArm=true,LeftLowerArm=true,LeftHand=true,RightUpperArm=true,RightLowerArm=true,RightHand=true,
+        LeftUpperLeg=true,LeftLowerLeg=true,LeftFoot=true,RightUpperLeg=true,RightLowerLeg=true,RightFoot=true,
+        ["Left Arm"]=true,["Right Arm"]=true,["Left Leg"]=true,["Right Leg"]=true}
+    local function restore(item)
+        local saved=snapshots[item]
+        if saved then
+            for property,value in pairs(saved)do pcall(function()item[property]=value end)end
+            snapshots[item]=nil
+        end
+        if copies[item]then
+            if deps.CreateView then copies[item].Transparency=1 else copies[item]:Destroy()end
+            copies[item]=nil
+        end
+    end
+    local function clear()
+        for _,connection in ipairs(connections)do connection:Disconnect()end
+        table.clear(connections)
+        for _,connection in pairs(external)do connection:Disconnect()end
+        table.clear(external)nextEffects=0 wingsState=nil
+        for item in pairs(snapshots)do restore(item)end
+        if view then view:Destroy()view=nil end
+        table.clear(copies)
+        table.clear(alpha)table.clear(hair)
+        character=nil
+    end
+    local function set(item,property,value)
+        local saved=snapshots[item]
+        if not saved then saved={}snapshots[item]=saved end
+        if saved[property]==nil then saved[property]=item[property]end
+        item[property]=value
+    end
+    local function belongs(item)
+        if character and item:IsDescendantOf(character)then return true end
+        for root in pairs(external)do if item==root or item:IsDescendantOf(root)then return true end end
+        return false
+    end
+    local function hide(item)
+        if not character or not belongs(item)then return end
+        if item.Parent and item.Parent.Name=="Orbs"and item:IsDescendantOf(character)then nextEffects=0 end
+        if item:IsA("BasePart")then
+            set(item,"LocalTransparencyModifier",1)
+            if item.Parent==character and body[item.Name]and not copies[item]then
+                local part
+                if deps.CreateView then part=view:FindFirstChild(item.Name)else part=Instance.new("Part")end
+                if not part or not part:IsA("BasePart")then return end
+                if not deps.CreateView then
+                part.Name=item.Name
+                part.Anchored=true part.CanCollide=false part.CanTouch=false part.CanQuery=false
+                part.CastShadow=false part.Archivable=false
+                part.Color=Color3.fromRGB(18,18,18)
+                part.Material=Enum.Material.SmoothPlastic
+                part.Size=item.Size part.CFrame=item.CFrame
+                if item.Name=="Head"then part.Shape=Enum.PartType.Ball end
+                part.Parent=view
+                end
+                copies[item]=part
+            end
+        elseif item:IsA("Decal")or item:IsA("Texture")then set(item,"Transparency",1)
+        elseif item:IsA("ParticleEmitter")or item:IsA("Trail")or item:IsA("Beam")
+            or item:IsA("Fire")or item:IsA("Smoke")or item:IsA("Sparkles")
+            or item:IsA("Highlight")or item:IsA("BillboardGui")or item:IsA("SurfaceGui")then
+            set(item,"Enabled",false)
+        elseif item:IsA("Light")then set(item,"Enabled",false)
+        elseif item:IsA("SelectionBox")or item:IsA("SelectionSphere")or item:IsA("HandleAdornment")then
+            set(item,"Visible",false)
+        end
+    end
+    local bind
+    bind=function(current)
+        clear()
+        if not enabled or stopped then return end
+        connections[#connections+1]=deps.Player.CharacterAdded:Connect(bind)
+        connections[#connections+1]=deps.Player.CharacterRemoving:Connect(function(old)
+            if old==character then bind(nil)end
+        end)
+        character=current
+        if not current then return end
+        if deps.CreateView then
+            local ok,value=pcall(deps.CreateView)
+            if not ok or not value then
+                enabled=false clear()
+                if type(toggle.SetValue)=="function"then toggle:SetValue(false)end
+                if deps.Notify then deps.Notify("Anonymous appearance is not ready; toggle again after the character loads")end
+                return
+            end
+            view=value
+            local head=view:FindFirstChild("Head")
+            for _,item in ipairs(view:GetDescendants())do
+                if item:IsA("BasePart")then
+                    alpha[item]=item.Transparency
+                    if head and item.Parent.Name=="Hair"then
+                        hair[#hair+1]={Part=item,Offset=head.CFrame:ToObjectSpace(item.CFrame),Alpha=item.Transparency}
+                    end
+                end
+            end
+        else view=Instance.new("Model")end
+        view.Name="LarpZeroAnonymousView"view.Archivable=false view.Parent=deps.World
+        connections[#connections+1]=current.DescendantAdded:Connect(hide)
+        connections[#connections+1]=current.DescendantRemoving:Connect(restore)
+        for _,item in ipairs(current:GetDescendants())do hide(item)end
+        connections[#connections+1]=deps.Frame:Connect(function()
+            if not enabled or stopped or not character or not character.Parent then return end
+            local properties=character:FindFirstChild("Properties")
+            local wings=properties and properties:FindFirstChild("WingsActive")
+            if wings and wings.Value~=wingsState then
+                wingsState=wings.Value nextEffects=0
+                local current=character
+                task.delay(.06,function()if enabled and character==current then nextEffects=0 end end)
+            end
+            if deps.OwnedEffects and os.clock()>=nextEffects then
+                nextEffects=os.clock()+1
+                local ok,list=pcall(deps.OwnedEffects,character)
+                if ok and type(list)=="table"then for _,root in ipairs(list)do
+                    if root.Parent and not external[root]then
+                        external[root]=root.DescendantAdded:Connect(hide)
+                        hide(root)
+                        for _,item in ipairs(root:GetDescendants())do hide(item)end
+                    end
+                end end
+                for root,connection in pairs(external)do
+                    if not root.Parent then connection:Disconnect()external[root]=nil end
+                end
+            end
+            for item,saved in pairs(snapshots)do
+                if belongs(item)then
+                    if saved.LocalTransparencyModifier~=nil then item.LocalTransparencyModifier=1 end
+                    if saved.Enabled~=nil then item.Enabled=false end
+                    if saved.Transparency~=nil then item.Transparency=1 end
+                    if saved.Visible~=nil then item.Visible=false end
+                else restore(item)end
+            end
+            for source,part in pairs(copies)do
+                if source.Parent==character then
+                    if deps.CreateView then
+                        local root=character:FindFirstChild("HumanoidRootPart")
+                        local props=character:FindFirstChild("Properties")
+                        local scale=props and props:GetAttribute("RigScale")or 1
+                        if type(scale)~="number"or scale<=0 or scale~=scale then scale=1 end
+                        if root then
+                            local relative=root.CFrame:ToObjectSpace(source.CFrame)
+                            part.CFrame=root.CFrame*CFrame.new(relative.Position/scale)*relative.Rotation
+                        else part.CFrame=source.CFrame end
+                    else part.Size=source.Size part.CFrame=source.CFrame end
+                    local camera=deps.World.CurrentCamera
+                    part.Transparency=camera and(source.Position-camera.CFrame.Position).Magnitude<.8 and 1 or(alpha[part]or 0)
+                end
+            end
+            if deps.CreateView then
+                local head=character:FindFirstChild("Head")
+                local rendered=head and copies[head]
+                for _,row in ipairs(hair)do
+                    row.Part.Transparency=rendered and rendered.Transparency<1 and row.Alpha or 1
+                    if rendered then row.Part.CFrame=rendered.CFrame*row.Offset end
+                end
+            end
+        end)
+    end
+    local controller={}
+    function controller.Set(value)
+        enabled=value==true
+        if enabled and not stopped then bind(deps.Player.Character)else clear()end
+    end
+    toggle:OnChanged(controller.Set)
+    deps.OnUnload(function()stopped=true enabled=false clear()end)
+    return controller
+end
+
+    end)()
+    local create=(function()
+-- Fixed visual preset only. No account identifiers or equipped-item data.
+return function(storage)
+    local assets=storage:FindFirstChild("ClientAssets")
+    local renderer=assets and assets:FindFirstChild("EquipmentRenderer")
+    local base=renderer and renderer:FindFirstChild("BaseCharacter")
+    local avatar=storage:FindFirstChild("Avatar")
+    local function asset(folder,name)
+        local group=avatar and avatar:FindFirstChild(folder)
+        local value=group and group:FindFirstChild(name)
+        assert(value,"Anonymous appearance assets are not ready")
+        return value
+    end
+    assert(base,"Anonymous base rig is not ready")
+    local skin=asset("Skin","1"):FindFirstChildOfClass("Decal")
+    local hair,eyes,brows,mouth,marking=asset("Hair","32"),asset("Eyes","6"),asset("Brows","5"),asset("Mouthes","1"),asset("Markings","1")
+    assert(skin,"Anonymous skin is not ready")
+    local rig=require(storage.Util.Rig)
+    local model=base:Clone()
+    local ok=pcall(function()
+        local green=Color3.fromRGB(166,255,139)
+        rig:ApplySkinColor(model,skin.Texture)
+        rig:ApplyHair(model,hair)
+        rig:RecolorHair(model,green)
+        rig:ApplyEyes(model,eyes,"both",Color3.new(1,1,1))
+        rig:ApplyEyeColor(model,green,"both")
+        rig:ApplyBrows(model,brows)
+        rig:ApplyMouth(model,mouth)
+        rig:ApplyMarking(model,marking)
+        rig:ApplyMarkingColor(model,Color3.new(1,1,1))
+        -- ApplyHair creates weld offsets; resolve them before making a render-only rig.
+        for _,part in ipairs(model.Hair:GetDescendants())do
+            if part:IsA("BasePart")then
+                local weld=part:FindFirstChildOfClass("Weld")
+                if weld and weld.Part0 and weld.Part1==part then
+                    part.CFrame=weld.Part0.CFrame*weld.C0*weld.C1:Inverse()
+                end
+            end
+        end
+        for _,item in ipairs(model:GetDescendants())do
+            if item:IsA("BasePart")then
+                item.Anchored=true item.CanCollide=false item.CanTouch=false item.CanQuery=false
+                item.CastShadow=false item.Reflectance=0 item.LocalTransparencyModifier=0
+                item.Material=Enum.Material.SmoothPlastic
+            elseif not(item:IsA("Decal")or item:IsA("Texture")or item:IsA("Folder")or item:IsA("Model"))then
+                item:Destroy()
+            end
+        end
+        for _,name in ipairs({"HumanoidRootPart","Collider","RightHandle","LeftHandle"})do
+            local item=model:FindFirstChild(name)
+            if item then item:Destroy()end
+        end
+    end)
+    if not ok then model:Destroy()error("Anonymous appearance could not be prepared")end
+    model.Name="LarpZeroAnonymousView"model.Archivable=false
+    return model
+end
+
+    end)()
+    local ownedEffects=(function()
+-- Read only local visual ownership; never alter the game's effect callbacks.
+return function(character,storage,heartbeat)
+    local result={}
+    if type(getupvalues)~="function"then return result end
+    local module=storage.Shared.Combat.Skillsets:FindFirstChild("MageOfLight")
+    if not module then return result end
+    local api=require(module)
+    local function values(fn)
+        if type(fn)~="function"then return {}end
+        local ok,list=pcall(getupvalues,fn)
+        return ok and type(list)=="table"and list or {}
+    end
+    for _,value in pairs(values(api.OnCharacter))do
+        local rows=type(value)=="table"and value[character]
+        if type(rows)=="table"then
+            for _,row in pairs(rows)do
+                local model=type(row)=="table"and row[3]
+                if typeof(model)=="Instance"and model:IsA("Model")and model.Name=="LightOrb"then
+                    result[#result+1]=model
+                end
+            end
+        end
+    end
+    if character.Parent and character.Parent.Parent:FindFirstChild("AngelWings")and type(getconnections)=="function"then
+        local ok,list=pcall(getconnections,heartbeat)
+        if ok then for _,connection in ipairs(list)do
+            local read,fn=pcall(function()return connection.Function end)
+            if read and type(fn)=="function"then
+                local up=values(fn)
+                local owned=false
+                for _,value in pairs(up)do if value==character then owned=true break end end
+                if owned then for _,value in pairs(up)do
+                    if typeof(value)=="Instance"and value:IsA("Model")and value.Name=="AngelWings"then
+                        result[#result+1]=value
+                    end
+                end end
+            end
+        end end
+    end
+    return result
+end
+
+    end)()
+    install(Toggles.AnonymousModeToggle,{
+        Player=LocalPlayer,World=Workspace,Frame=RunService.RenderStepped,
+        CreateView=function()
+            local ok,value=GameCall(create,ReplicatedStorage)
+            if not ok then error("Anonymous appearance assets unavailable")end
+            return value
+        end,
+        Notify=function(message)Library:Notify(message,4)end,
+        OwnedEffects=function(character)
+            if LocalPlayer:GetAttribute("Class")~="MageOfLight"then return {}end
+            local ok,value=GameCall(ownedEffects,character,ReplicatedStorage,RunService.Heartbeat)
+            return ok and value or {}
+        end,
+        OnUnload=function(callback)Library:OnUnload(callback)end,
+    })
 end
 
 Toggles.AFKToggle:OnChanged(function(enabled)
@@ -34926,8 +35228,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r27-rc3")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","f7d1fa2daafc")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r28-rc5")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","424899b18728")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -34957,8 +35259,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | rc3",
-    Footer = "Build 2026.11.11-r27-rc3",
+    Title = "Larp Zero | rc5",
+    Footer = "Build 2026.11.11-r28-rc5",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -36915,6 +37217,7 @@ CreateToggles({
     { "DeathEffectToggle", Text = "Remove death effects", Tooltip = "Prevents all death effects from being rendered", Tab = FirstTab },
     { "KnockdownToggle", Text = "Disable knockdown", Tooltip = "Prevents the knockdown status from working (everyone can see this if they look at your statuses)", Tab = FirstTab },
     { "ShowEndTimeToggle", Text = "Display end time", Tooltip = "Show the dungeons clear time when finished", Tab = FirstTab },
+    { "AnonymousModeToggle", Text = "Anonymous mode", Tooltip = "Local-only fixed armor-free avatar; no equipment skins or cosmetic effects. Restores your appearance when off. Other players see no change.", Tab = FirstTab },
     { "WaystoneToggle", Text = "Closest waystone", Tooltip = "Hide the icon for the closest waystone", Tab = SecondTab },
     { "MissionObjectiveToggle", Text = "Mission objective", Tooltip = "Hide the text on your screen telling you what to do", Tab = SecondTab, AttachedFunction = ToggleMenu, FunctionValue = "MissionObjective" },
     { "BossBarToggle", Text = "Boss bar", Tooltip = "Hide boss bars on your screen", Tab = SecondTab, AttachedFunction = ToggleMenu, FunctionValue = "BossHealthbar" },
@@ -36985,7 +37288,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.11-r27-rc3 [f7d1fa2daafc]",true)
+cleanSettings:AddLabel("Build: 2026.11.11-r28-rc5 [424899b18728]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -37062,7 +37365,7 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=37,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=43,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
         -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
@@ -38579,6 +38882,307 @@ if IsDungeon then
             SV.ShowTime = nil
         end
     end)
+end
+
+do
+    local install=(function()
+-- Local presentation only: no outfit/equipment, rig, physics, or network changes.
+return function(toggle,deps)
+    local enabled,stopped=false,false
+    local character,view
+    local snapshots,copies={},{}
+    local alpha,hair={},{}
+    local external={}
+    local nextEffects=0
+    local wingsState=nil
+    local connections={}
+    local body={Head=true,Face=true,EyeFace=true,MarkingFace=true,LeftHandClosed=true,RightHandClosed=true,UpperTorso=true,LowerTorso=true,Torso=true,
+        LeftUpperArm=true,LeftLowerArm=true,LeftHand=true,RightUpperArm=true,RightLowerArm=true,RightHand=true,
+        LeftUpperLeg=true,LeftLowerLeg=true,LeftFoot=true,RightUpperLeg=true,RightLowerLeg=true,RightFoot=true,
+        ["Left Arm"]=true,["Right Arm"]=true,["Left Leg"]=true,["Right Leg"]=true}
+    local function restore(item)
+        local saved=snapshots[item]
+        if saved then
+            for property,value in pairs(saved)do pcall(function()item[property]=value end)end
+            snapshots[item]=nil
+        end
+        if copies[item]then
+            if deps.CreateView then copies[item].Transparency=1 else copies[item]:Destroy()end
+            copies[item]=nil
+        end
+    end
+    local function clear()
+        for _,connection in ipairs(connections)do connection:Disconnect()end
+        table.clear(connections)
+        for _,connection in pairs(external)do connection:Disconnect()end
+        table.clear(external)nextEffects=0 wingsState=nil
+        for item in pairs(snapshots)do restore(item)end
+        if view then view:Destroy()view=nil end
+        table.clear(copies)
+        table.clear(alpha)table.clear(hair)
+        character=nil
+    end
+    local function set(item,property,value)
+        local saved=snapshots[item]
+        if not saved then saved={}snapshots[item]=saved end
+        if saved[property]==nil then saved[property]=item[property]end
+        item[property]=value
+    end
+    local function belongs(item)
+        if character and item:IsDescendantOf(character)then return true end
+        for root in pairs(external)do if item==root or item:IsDescendantOf(root)then return true end end
+        return false
+    end
+    local function hide(item)
+        if not character or not belongs(item)then return end
+        if item.Parent and item.Parent.Name=="Orbs"and item:IsDescendantOf(character)then nextEffects=0 end
+        if item:IsA("BasePart")then
+            set(item,"LocalTransparencyModifier",1)
+            if item.Parent==character and body[item.Name]and not copies[item]then
+                local part
+                if deps.CreateView then part=view:FindFirstChild(item.Name)else part=Instance.new("Part")end
+                if not part or not part:IsA("BasePart")then return end
+                if not deps.CreateView then
+                part.Name=item.Name
+                part.Anchored=true part.CanCollide=false part.CanTouch=false part.CanQuery=false
+                part.CastShadow=false part.Archivable=false
+                part.Color=Color3.fromRGB(18,18,18)
+                part.Material=Enum.Material.SmoothPlastic
+                part.Size=item.Size part.CFrame=item.CFrame
+                if item.Name=="Head"then part.Shape=Enum.PartType.Ball end
+                part.Parent=view
+                end
+                copies[item]=part
+            end
+        elseif item:IsA("Decal")or item:IsA("Texture")then set(item,"Transparency",1)
+        elseif item:IsA("ParticleEmitter")or item:IsA("Trail")or item:IsA("Beam")
+            or item:IsA("Fire")or item:IsA("Smoke")or item:IsA("Sparkles")
+            or item:IsA("Highlight")or item:IsA("BillboardGui")or item:IsA("SurfaceGui")then
+            set(item,"Enabled",false)
+        elseif item:IsA("Light")then set(item,"Enabled",false)
+        elseif item:IsA("SelectionBox")or item:IsA("SelectionSphere")or item:IsA("HandleAdornment")then
+            set(item,"Visible",false)
+        end
+    end
+    local bind
+    bind=function(current)
+        clear()
+        if not enabled or stopped then return end
+        connections[#connections+1]=deps.Player.CharacterAdded:Connect(bind)
+        connections[#connections+1]=deps.Player.CharacterRemoving:Connect(function(old)
+            if old==character then bind(nil)end
+        end)
+        character=current
+        if not current then return end
+        if deps.CreateView then
+            local ok,value=pcall(deps.CreateView)
+            if not ok or not value then
+                enabled=false clear()
+                if type(toggle.SetValue)=="function"then toggle:SetValue(false)end
+                if deps.Notify then deps.Notify("Anonymous appearance is not ready; toggle again after the character loads")end
+                return
+            end
+            view=value
+            local head=view:FindFirstChild("Head")
+            for _,item in ipairs(view:GetDescendants())do
+                if item:IsA("BasePart")then
+                    alpha[item]=item.Transparency
+                    if head and item.Parent.Name=="Hair"then
+                        hair[#hair+1]={Part=item,Offset=head.CFrame:ToObjectSpace(item.CFrame),Alpha=item.Transparency}
+                    end
+                end
+            end
+        else view=Instance.new("Model")end
+        view.Name="LarpZeroAnonymousView"view.Archivable=false view.Parent=deps.World
+        connections[#connections+1]=current.DescendantAdded:Connect(hide)
+        connections[#connections+1]=current.DescendantRemoving:Connect(restore)
+        for _,item in ipairs(current:GetDescendants())do hide(item)end
+        connections[#connections+1]=deps.Frame:Connect(function()
+            if not enabled or stopped or not character or not character.Parent then return end
+            local properties=character:FindFirstChild("Properties")
+            local wings=properties and properties:FindFirstChild("WingsActive")
+            if wings and wings.Value~=wingsState then
+                wingsState=wings.Value nextEffects=0
+                local current=character
+                task.delay(.06,function()if enabled and character==current then nextEffects=0 end end)
+            end
+            if deps.OwnedEffects and os.clock()>=nextEffects then
+                nextEffects=os.clock()+1
+                local ok,list=pcall(deps.OwnedEffects,character)
+                if ok and type(list)=="table"then for _,root in ipairs(list)do
+                    if root.Parent and not external[root]then
+                        external[root]=root.DescendantAdded:Connect(hide)
+                        hide(root)
+                        for _,item in ipairs(root:GetDescendants())do hide(item)end
+                    end
+                end end
+                for root,connection in pairs(external)do
+                    if not root.Parent then connection:Disconnect()external[root]=nil end
+                end
+            end
+            for item,saved in pairs(snapshots)do
+                if belongs(item)then
+                    if saved.LocalTransparencyModifier~=nil then item.LocalTransparencyModifier=1 end
+                    if saved.Enabled~=nil then item.Enabled=false end
+                    if saved.Transparency~=nil then item.Transparency=1 end
+                    if saved.Visible~=nil then item.Visible=false end
+                else restore(item)end
+            end
+            for source,part in pairs(copies)do
+                if source.Parent==character then
+                    if deps.CreateView then
+                        local root=character:FindFirstChild("HumanoidRootPart")
+                        local props=character:FindFirstChild("Properties")
+                        local scale=props and props:GetAttribute("RigScale")or 1
+                        if type(scale)~="number"or scale<=0 or scale~=scale then scale=1 end
+                        if root then
+                            local relative=root.CFrame:ToObjectSpace(source.CFrame)
+                            part.CFrame=root.CFrame*CFrame.new(relative.Position/scale)*relative.Rotation
+                        else part.CFrame=source.CFrame end
+                    else part.Size=source.Size part.CFrame=source.CFrame end
+                    local camera=deps.World.CurrentCamera
+                    part.Transparency=camera and(source.Position-camera.CFrame.Position).Magnitude<.8 and 1 or(alpha[part]or 0)
+                end
+            end
+            if deps.CreateView then
+                local head=character:FindFirstChild("Head")
+                local rendered=head and copies[head]
+                for _,row in ipairs(hair)do
+                    row.Part.Transparency=rendered and rendered.Transparency<1 and row.Alpha or 1
+                    if rendered then row.Part.CFrame=rendered.CFrame*row.Offset end
+                end
+            end
+        end)
+    end
+    local controller={}
+    function controller.Set(value)
+        enabled=value==true
+        if enabled and not stopped then bind(deps.Player.Character)else clear()end
+    end
+    toggle:OnChanged(controller.Set)
+    deps.OnUnload(function()stopped=true enabled=false clear()end)
+    return controller
+end
+
+    end)()
+    local create=(function()
+-- Fixed visual preset only. No account identifiers or equipped-item data.
+return function(storage)
+    local assets=storage:FindFirstChild("ClientAssets")
+    local renderer=assets and assets:FindFirstChild("EquipmentRenderer")
+    local base=renderer and renderer:FindFirstChild("BaseCharacter")
+    local avatar=storage:FindFirstChild("Avatar")
+    local function asset(folder,name)
+        local group=avatar and avatar:FindFirstChild(folder)
+        local value=group and group:FindFirstChild(name)
+        assert(value,"Anonymous appearance assets are not ready")
+        return value
+    end
+    assert(base,"Anonymous base rig is not ready")
+    local skin=asset("Skin","1"):FindFirstChildOfClass("Decal")
+    local hair,eyes,brows,mouth,marking=asset("Hair","32"),asset("Eyes","6"),asset("Brows","5"),asset("Mouthes","1"),asset("Markings","1")
+    assert(skin,"Anonymous skin is not ready")
+    local rig=require(storage.Util.Rig)
+    local model=base:Clone()
+    local ok=pcall(function()
+        local green=Color3.fromRGB(166,255,139)
+        rig:ApplySkinColor(model,skin.Texture)
+        rig:ApplyHair(model,hair)
+        rig:RecolorHair(model,green)
+        rig:ApplyEyes(model,eyes,"both",Color3.new(1,1,1))
+        rig:ApplyEyeColor(model,green,"both")
+        rig:ApplyBrows(model,brows)
+        rig:ApplyMouth(model,mouth)
+        rig:ApplyMarking(model,marking)
+        rig:ApplyMarkingColor(model,Color3.new(1,1,1))
+        -- ApplyHair creates weld offsets; resolve them before making a render-only rig.
+        for _,part in ipairs(model.Hair:GetDescendants())do
+            if part:IsA("BasePart")then
+                local weld=part:FindFirstChildOfClass("Weld")
+                if weld and weld.Part0 and weld.Part1==part then
+                    part.CFrame=weld.Part0.CFrame*weld.C0*weld.C1:Inverse()
+                end
+            end
+        end
+        for _,item in ipairs(model:GetDescendants())do
+            if item:IsA("BasePart")then
+                item.Anchored=true item.CanCollide=false item.CanTouch=false item.CanQuery=false
+                item.CastShadow=false item.Reflectance=0 item.LocalTransparencyModifier=0
+                item.Material=Enum.Material.SmoothPlastic
+            elseif not(item:IsA("Decal")or item:IsA("Texture")or item:IsA("Folder")or item:IsA("Model"))then
+                item:Destroy()
+            end
+        end
+        for _,name in ipairs({"HumanoidRootPart","Collider","RightHandle","LeftHandle"})do
+            local item=model:FindFirstChild(name)
+            if item then item:Destroy()end
+        end
+    end)
+    if not ok then model:Destroy()error("Anonymous appearance could not be prepared")end
+    model.Name="LarpZeroAnonymousView"model.Archivable=false
+    return model
+end
+
+    end)()
+    local ownedEffects=(function()
+-- Read only local visual ownership; never alter the game's effect callbacks.
+return function(character,storage,heartbeat)
+    local result={}
+    if type(getupvalues)~="function"then return result end
+    local module=storage.Shared.Combat.Skillsets:FindFirstChild("MageOfLight")
+    if not module then return result end
+    local api=require(module)
+    local function values(fn)
+        if type(fn)~="function"then return {}end
+        local ok,list=pcall(getupvalues,fn)
+        return ok and type(list)=="table"and list or {}
+    end
+    for _,value in pairs(values(api.OnCharacter))do
+        local rows=type(value)=="table"and value[character]
+        if type(rows)=="table"then
+            for _,row in pairs(rows)do
+                local model=type(row)=="table"and row[3]
+                if typeof(model)=="Instance"and model:IsA("Model")and model.Name=="LightOrb"then
+                    result[#result+1]=model
+                end
+            end
+        end
+    end
+    if character.Parent and character.Parent.Parent:FindFirstChild("AngelWings")and type(getconnections)=="function"then
+        local ok,list=pcall(getconnections,heartbeat)
+        if ok then for _,connection in ipairs(list)do
+            local read,fn=pcall(function()return connection.Function end)
+            if read and type(fn)=="function"then
+                local up=values(fn)
+                local owned=false
+                for _,value in pairs(up)do if value==character then owned=true break end end
+                if owned then for _,value in pairs(up)do
+                    if typeof(value)=="Instance"and value:IsA("Model")and value.Name=="AngelWings"then
+                        result[#result+1]=value
+                    end
+                end end
+            end
+        end end
+    end
+    return result
+end
+
+    end)()
+    install(Toggles.AnonymousModeToggle,{
+        Player=LocalPlayer,World=Workspace,Frame=RunService.RenderStepped,
+        CreateView=function()
+            local ok,value=GameCall(create,ReplicatedStorage)
+            if not ok then error("Anonymous appearance assets unavailable")end
+            return value
+        end,
+        Notify=function(message)Library:Notify(message,4)end,
+        OwnedEffects=function(character)
+            if LocalPlayer:GetAttribute("Class")~="MageOfLight"then return {}end
+            local ok,value=GameCall(ownedEffects,character,ReplicatedStorage,RunService.Heartbeat)
+            return ok and value or {}
+        end,
+        OnUnload=function(callback)Library:OnUnload(callback)end,
+    })
 end
 
 Toggles.AFKToggle:OnChanged(function(enabled)
