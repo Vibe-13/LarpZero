@@ -6,7 +6,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=34 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=37 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -31,7 +31,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=34 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=37 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -12933,6 +12933,8 @@ function Registry.Create(deps)
     local retry=setmetatable({},{__mode="k"})
     local stopped=false
     local folder,added,removed
+    local auxiliary,auxAdded,auxRemoved
+    local candidates=setmetatable({},{__mode="k"})
     local nextPoll=0
     local registry={}
     local function count()
@@ -12947,9 +12949,12 @@ function Registry.Create(deps)
         count()
     end
     local function eligible(mob)
-        if not mob or mob.Parent~=folder then return false end
+        if not mob or not mob.Parent then return false end
         local properties=mob:FindFirstChild("HealthProperties")
         local health=properties and properties:FindFirstChild("Health")
+        if mob.Parent~=folder then
+            if not deps.IsAuxiliary or not deps.IsAuxiliary(mob)or not health then return false end
+        end
         return not health or health.Value>0
     end
     function registry.Register(mob)
@@ -12978,13 +12983,45 @@ function Registry.Create(deps)
                 removed=folder.ChildRemoved:Connect(registry.Remove)
             end
         end
+        local root=deps.AuxiliaryFolder and deps.AuxiliaryFolder()
+        if root~=auxiliary then
+            if auxAdded then auxAdded:Disconnect()end
+            if auxRemoved then auxRemoved:Disconnect()end
+            table.clear(candidates)
+            auxiliary=root
+            if root then
+                local function discover(node)
+                    local item=node
+                    while item and item~=root do
+                        if deps.IsAuxiliary(item)then
+                            candidates[item]=true
+                            registry.Register(item)
+                            return
+                        end
+                        item=item.Parent
+                    end
+                end
+                auxAdded=root.DescendantAdded:Connect(discover)
+                auxRemoved=root.DescendantRemoving:Connect(function(node)
+                    if candidates[node]then candidates[node]=nil registry.Remove(node)end
+                end)
+                for _,node in ipairs(root:GetDescendants())do discover(node)end
+            end
+        end
         for mob in pairs(deps.Entries)do if not eligible(mob)then registry.Remove(mob)end end
         if folder then for _,mob in ipairs(folder:GetChildren())do registry.Register(mob)end end
+        for mob in pairs(candidates)do
+            if not mob.Parent or not deps.IsAuxiliary(mob)then candidates[mob]=nil
+            else registry.Register(mob)end
+        end
     end
     function registry.Stop()
         stopped=true
         if added then added:Disconnect()end
         if removed then removed:Disconnect()end
+        if auxAdded then auxAdded:Disconnect()end
+        if auxRemoved then auxRemoved:Disconnect()end
+        table.clear(candidates)
         for mob in pairs(deps.Entries)do deps.Entries[mob]=nil end
         count()
     end
@@ -12996,6 +13033,12 @@ end)().Create({
     Entries=ISV.MobTable,Now=time,Spawn=task.spawn,
     Stopped=function()return KillSwitch or ScriptUnloaded end,
     Folder=function()return Workspace:FindFirstChild("Mobs")end,
+    AuxiliaryFolder=function()return Workspace end,
+    IsAuxiliary=function(mob)
+        if not mob:IsA("Model")or Blockers[mob.Name]~=true or not mob:IsDescendantOf(Workspace)then return false end
+        local characters=Workspace:FindFirstChild("Characters")
+        return mob.Parent~=Workspace:FindFirstChild("Mobs")and not(characters and mob:IsDescendantOf(characters))
+    end,
     Validate=ValidMob,Count=function(value)IsAliveMobs=value end,
     ClearTarget=function(mob)
         if CurrentMob==mob then CurrentMob=nil end
@@ -13223,6 +13266,8 @@ function Registry.Create(deps)
     local retry=setmetatable({},{__mode="k"})
     local stopped=false
     local folder,added,removed
+    local auxiliary,auxAdded,auxRemoved
+    local candidates=setmetatable({},{__mode="k"})
     local nextPoll=0
     local registry={}
     local function count()
@@ -13237,9 +13282,12 @@ function Registry.Create(deps)
         count()
     end
     local function eligible(mob)
-        if not mob or mob.Parent~=folder then return false end
+        if not mob or not mob.Parent then return false end
         local properties=mob:FindFirstChild("HealthProperties")
         local health=properties and properties:FindFirstChild("Health")
+        if mob.Parent~=folder then
+            if not deps.IsAuxiliary or not deps.IsAuxiliary(mob)or not health then return false end
+        end
         return not health or health.Value>0
     end
     function registry.Register(mob)
@@ -13268,13 +13316,45 @@ function Registry.Create(deps)
                 removed=folder.ChildRemoved:Connect(registry.Remove)
             end
         end
+        local root=deps.AuxiliaryFolder and deps.AuxiliaryFolder()
+        if root~=auxiliary then
+            if auxAdded then auxAdded:Disconnect()end
+            if auxRemoved then auxRemoved:Disconnect()end
+            table.clear(candidates)
+            auxiliary=root
+            if root then
+                local function discover(node)
+                    local item=node
+                    while item and item~=root do
+                        if deps.IsAuxiliary(item)then
+                            candidates[item]=true
+                            registry.Register(item)
+                            return
+                        end
+                        item=item.Parent
+                    end
+                end
+                auxAdded=root.DescendantAdded:Connect(discover)
+                auxRemoved=root.DescendantRemoving:Connect(function(node)
+                    if candidates[node]then candidates[node]=nil registry.Remove(node)end
+                end)
+                for _,node in ipairs(root:GetDescendants())do discover(node)end
+            end
+        end
         for mob in pairs(deps.Entries)do if not eligible(mob)then registry.Remove(mob)end end
         if folder then for _,mob in ipairs(folder:GetChildren())do registry.Register(mob)end end
+        for mob in pairs(candidates)do
+            if not mob.Parent or not deps.IsAuxiliary(mob)then candidates[mob]=nil
+            else registry.Register(mob)end
+        end
     end
     function registry.Stop()
         stopped=true
         if added then added:Disconnect()end
         if removed then removed:Disconnect()end
+        if auxAdded then auxAdded:Disconnect()end
+        if auxRemoved then auxRemoved:Disconnect()end
+        table.clear(candidates)
         for mob in pairs(deps.Entries)do deps.Entries[mob]=nil end
         count()
     end
@@ -13286,6 +13366,12 @@ end)().Create({
     Entries=ISV.MobTable,Now=time,Spawn=task.spawn,
     Stopped=function()return KillSwitch or ScriptUnloaded end,
     Folder=function()return Workspace:FindFirstChild("Mobs")end,
+    AuxiliaryFolder=function()return Workspace end,
+    IsAuxiliary=function(mob)
+        if not mob:IsA("Model")or Blockers[mob.Name]~=true or not mob:IsDescendantOf(Workspace)then return false end
+        local characters=Workspace:FindFirstChild("Characters")
+        return mob.Parent~=Workspace:FindFirstChild("Mobs")and not(characters and mob:IsDescendantOf(characters))
+    end,
     Validate=ValidMob,Count=function(value)IsAliveMobs=value end,
     ClearTarget=function(mob)
         if CurrentMob==mob then CurrentMob=nil end
@@ -14914,8 +15000,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r26-rc4")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","be414dc5027b")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r27-rc3")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","f7d1fa2daafc")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -14945,8 +15031,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | rc4",
-    Footer = "Build 2026.11.11-r26-rc4",
+    Title = "Larp Zero | rc3",
+    Footer = "Build 2026.11.11-r27-rc3",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -16973,7 +17059,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.11-r26-rc4 [be414dc5027b]",true)
+cleanSettings:AddLabel("Build: 2026.11.11-r27-rc3 [f7d1fa2daafc]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -17050,7 +17136,7 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=34,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=37,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
         -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
@@ -32773,6 +32859,8 @@ function Registry.Create(deps)
     local retry=setmetatable({},{__mode="k"})
     local stopped=false
     local folder,added,removed
+    local auxiliary,auxAdded,auxRemoved
+    local candidates=setmetatable({},{__mode="k"})
     local nextPoll=0
     local registry={}
     local function count()
@@ -32787,9 +32875,12 @@ function Registry.Create(deps)
         count()
     end
     local function eligible(mob)
-        if not mob or mob.Parent~=folder then return false end
+        if not mob or not mob.Parent then return false end
         local properties=mob:FindFirstChild("HealthProperties")
         local health=properties and properties:FindFirstChild("Health")
+        if mob.Parent~=folder then
+            if not deps.IsAuxiliary or not deps.IsAuxiliary(mob)or not health then return false end
+        end
         return not health or health.Value>0
     end
     function registry.Register(mob)
@@ -32818,13 +32909,45 @@ function Registry.Create(deps)
                 removed=folder.ChildRemoved:Connect(registry.Remove)
             end
         end
+        local root=deps.AuxiliaryFolder and deps.AuxiliaryFolder()
+        if root~=auxiliary then
+            if auxAdded then auxAdded:Disconnect()end
+            if auxRemoved then auxRemoved:Disconnect()end
+            table.clear(candidates)
+            auxiliary=root
+            if root then
+                local function discover(node)
+                    local item=node
+                    while item and item~=root do
+                        if deps.IsAuxiliary(item)then
+                            candidates[item]=true
+                            registry.Register(item)
+                            return
+                        end
+                        item=item.Parent
+                    end
+                end
+                auxAdded=root.DescendantAdded:Connect(discover)
+                auxRemoved=root.DescendantRemoving:Connect(function(node)
+                    if candidates[node]then candidates[node]=nil registry.Remove(node)end
+                end)
+                for _,node in ipairs(root:GetDescendants())do discover(node)end
+            end
+        end
         for mob in pairs(deps.Entries)do if not eligible(mob)then registry.Remove(mob)end end
         if folder then for _,mob in ipairs(folder:GetChildren())do registry.Register(mob)end end
+        for mob in pairs(candidates)do
+            if not mob.Parent or not deps.IsAuxiliary(mob)then candidates[mob]=nil
+            else registry.Register(mob)end
+        end
     end
     function registry.Stop()
         stopped=true
         if added then added:Disconnect()end
         if removed then removed:Disconnect()end
+        if auxAdded then auxAdded:Disconnect()end
+        if auxRemoved then auxRemoved:Disconnect()end
+        table.clear(candidates)
         for mob in pairs(deps.Entries)do deps.Entries[mob]=nil end
         count()
     end
@@ -32836,6 +32959,12 @@ end)().Create({
     Entries=ISV.MobTable,Now=time,Spawn=task.spawn,
     Stopped=function()return KillSwitch or ScriptUnloaded end,
     Folder=function()return Workspace:FindFirstChild("Mobs")end,
+    AuxiliaryFolder=function()return Workspace end,
+    IsAuxiliary=function(mob)
+        if not mob:IsA("Model")or Blockers[mob.Name]~=true or not mob:IsDescendantOf(Workspace)then return false end
+        local characters=Workspace:FindFirstChild("Characters")
+        return mob.Parent~=Workspace:FindFirstChild("Mobs")and not(characters and mob:IsDescendantOf(characters))
+    end,
     Validate=ValidMob,Count=function(value)IsAliveMobs=value end,
     ClearTarget=function(mob)
         if CurrentMob==mob then CurrentMob=nil end
@@ -33063,6 +33192,8 @@ function Registry.Create(deps)
     local retry=setmetatable({},{__mode="k"})
     local stopped=false
     local folder,added,removed
+    local auxiliary,auxAdded,auxRemoved
+    local candidates=setmetatable({},{__mode="k"})
     local nextPoll=0
     local registry={}
     local function count()
@@ -33077,9 +33208,12 @@ function Registry.Create(deps)
         count()
     end
     local function eligible(mob)
-        if not mob or mob.Parent~=folder then return false end
+        if not mob or not mob.Parent then return false end
         local properties=mob:FindFirstChild("HealthProperties")
         local health=properties and properties:FindFirstChild("Health")
+        if mob.Parent~=folder then
+            if not deps.IsAuxiliary or not deps.IsAuxiliary(mob)or not health then return false end
+        end
         return not health or health.Value>0
     end
     function registry.Register(mob)
@@ -33108,13 +33242,45 @@ function Registry.Create(deps)
                 removed=folder.ChildRemoved:Connect(registry.Remove)
             end
         end
+        local root=deps.AuxiliaryFolder and deps.AuxiliaryFolder()
+        if root~=auxiliary then
+            if auxAdded then auxAdded:Disconnect()end
+            if auxRemoved then auxRemoved:Disconnect()end
+            table.clear(candidates)
+            auxiliary=root
+            if root then
+                local function discover(node)
+                    local item=node
+                    while item and item~=root do
+                        if deps.IsAuxiliary(item)then
+                            candidates[item]=true
+                            registry.Register(item)
+                            return
+                        end
+                        item=item.Parent
+                    end
+                end
+                auxAdded=root.DescendantAdded:Connect(discover)
+                auxRemoved=root.DescendantRemoving:Connect(function(node)
+                    if candidates[node]then candidates[node]=nil registry.Remove(node)end
+                end)
+                for _,node in ipairs(root:GetDescendants())do discover(node)end
+            end
+        end
         for mob in pairs(deps.Entries)do if not eligible(mob)then registry.Remove(mob)end end
         if folder then for _,mob in ipairs(folder:GetChildren())do registry.Register(mob)end end
+        for mob in pairs(candidates)do
+            if not mob.Parent or not deps.IsAuxiliary(mob)then candidates[mob]=nil
+            else registry.Register(mob)end
+        end
     end
     function registry.Stop()
         stopped=true
         if added then added:Disconnect()end
         if removed then removed:Disconnect()end
+        if auxAdded then auxAdded:Disconnect()end
+        if auxRemoved then auxRemoved:Disconnect()end
+        table.clear(candidates)
         for mob in pairs(deps.Entries)do deps.Entries[mob]=nil end
         count()
     end
@@ -33126,6 +33292,12 @@ end)().Create({
     Entries=ISV.MobTable,Now=time,Spawn=task.spawn,
     Stopped=function()return KillSwitch or ScriptUnloaded end,
     Folder=function()return Workspace:FindFirstChild("Mobs")end,
+    AuxiliaryFolder=function()return Workspace end,
+    IsAuxiliary=function(mob)
+        if not mob:IsA("Model")or Blockers[mob.Name]~=true or not mob:IsDescendantOf(Workspace)then return false end
+        local characters=Workspace:FindFirstChild("Characters")
+        return mob.Parent~=Workspace:FindFirstChild("Mobs")and not(characters and mob:IsDescendantOf(characters))
+    end,
     Validate=ValidMob,Count=function(value)IsAliveMobs=value end,
     ClearTarget=function(mob)
         if CurrentMob==mob then CurrentMob=nil end
@@ -34754,8 +34926,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r26-rc4")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","be414dc5027b")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r27-rc3")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","f7d1fa2daafc")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -34785,8 +34957,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | rc4",
-    Footer = "Build 2026.11.11-r26-rc4",
+    Title = "Larp Zero | rc3",
+    Footer = "Build 2026.11.11-r27-rc3",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -36813,7 +36985,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.11-r26-rc4 [be414dc5027b]",true)
+cleanSettings:AddLabel("Build: 2026.11.11-r27-rc3 [f7d1fa2daafc]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -36890,7 +37062,7 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=34,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=37,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
         -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
