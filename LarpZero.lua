@@ -6,7 +6,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=4 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=29 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -31,7 +31,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=4 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=29 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -47,6 +47,8 @@ end
 end)()
 if not CanResume(true)then return end
 if not game:IsLoaded() then game.Loaded:Wait() end
+local LarpZeroInstance,LarpZeroStartupLock
+do
 local LarpZeroLockRoot=game:GetService("CoreGui")
 local sharedLock=LarpZeroLockRoot:FindFirstChild("LarpZeroStartupLock")
 if sharedLock then
@@ -71,13 +73,14 @@ local oldGui=prior and prior.Library and prior.Library.ScreenGui
 local liveMenu=oldGui and oldGui.Parent~=nil and not prior.Library.Unloaded
 local recentStart=prior and prior.Loading and os.clock()-(prior.Started or 0)<90
 if sameServer and (recentStart or liveMenu) then return end
-local LarpZeroStartupLock=Instance.new("Folder")
+LarpZeroStartupLock=Instance.new("Folder")
 LarpZeroStartupLock.Name="LarpZeroStartupLock"
 LarpZeroStartupLock:SetAttribute("Started",os.clock())
 LarpZeroStartupLock:SetAttribute("Loading",true)
 LarpZeroStartupLock.Parent=LarpZeroLockRoot
-local LarpZeroInstance={Loading=true,Place=game.PlaceId,Server=game.JobId,Started=os.clock()}
+LarpZeroInstance={Loading=true,Place=game.PlaceId,Server=game.JobId,Started=os.clock()}
 getgenv().LarpZeroInstance=LarpZeroInstance
+end
 local InstallLocalProfiles=(function()
 -- Local settings only. No reporting or runtime downloads.
 return function(library,tab)
@@ -86,6 +89,10 @@ return function(library,tab)
     local group=tab:AddRightGroupbox("Local configurations")
     local excluded={ProfileName=true}
     local loading=false
+    local generation=0
+    library.ProfileLoading=false
+    library.ProfileLoaded=false
+    library.ProfileGeneration=0
     local function ready()
         return type(readfile)=="function" and type(writefile)=="function"
             and type(isfile)=="function" and type(isfolder)=="function" and type(makefolder)=="function"
@@ -98,6 +105,22 @@ return function(library,tab)
         return value
     end
     local function path(value)return folder.."/"..value..".json"end
+    local function validName(value)
+        return type(value)=="string" and value:match("^[%w_%-]+$") and #value<=48 and value~="teleport_resume"
+    end
+    local function decode(text)
+        local data=codec:JSONDecode(text)
+        if type(data)~="table" or data.Version~=1 or type(data.Options)~="table" or type(data.Toggles)~="table" then error("Invalid profile")end
+        return data
+    end
+    local function readProfile(value)
+        if not ready() or not validName(value) then error("Invalid profile")end
+        local ok,data=pcall(function()return decode(readfile(path(value)))end)
+        if ok then return data end
+        -- Recovery never rewrites a file. A backup is created only by Save Settings.
+        if isfile(path(value)..".bak")then return decode(readfile(path(value)..".bak"))end
+        error("Saved profile unavailable")
+    end
     local function prepare()
         if not ready() then error("Local storage unavailable")end
         if not isfolder(folder) then makefolder(folder)end
@@ -127,17 +150,22 @@ return function(library,tab)
         return data
     end
     local function load(value,startup)
-        prepare()
-        local data=codec:JSONDecode(readfile(path(value)))
-        if type(data)~="table" or data.Version~=1 or type(data.Options)~="table" or type(data.Toggles)~="table" then
-            error("Invalid profile")
-        end
+        local data=readProfile(value)
+        generation+=1
+        local current=generation
         loading=true
+        library.ProfileLoading=true
+        library.ProfileGeneration=current
         task.spawn(function()
+            if library.Unloaded or current~=generation then
+                if current==generation then loading=false library.ProfileLoading=false end
+                return
+            end
+            local partial=false
             local ok=pcall(function()
                 -- Stop active features before changing their supporting inputs.
-                for _,toggle in pairs(library.Toggles)do
-                    if toggle.Value and toggle~=library.Toggles.SafeModeToggle then
+                for key,toggle in pairs(library.Toggles)do
+                    if type(data.Toggles[key])=="boolean" and toggle.Value and toggle~=library.Toggles.SafeModeToggle then
                         local disabled=toggle.Disabled
                         toggle:SetDisabled(false)
                         toggle:SetValue(false)
@@ -148,7 +176,9 @@ return function(library,tab)
                     local option=library.Options[key]
                     if not excluded[key] and option and type(row)=="table" and option.Type==row.Type
                         and option.SpecialType~="Player" and option.SpecialType~="Team" then
+                        local applied=pcall(function()
                         if row.Type=="ColorPicker" then
+                            if type(row.Value)~="string" or not row.Value:match("^%x%x%x%x%x%x$")then error("Invalid color")end
                             option:SetValueRGB(Color3.fromHex(row.Value),row.Transparency)
                         elseif row.Type=="KeyPicker" then
                             option:SetValue({row.Value,row.Mode})
@@ -168,17 +198,28 @@ return function(library,tab)
                                 end
                             end
                             option:SetValue(values)
-                        else option:SetValue(row.Value)end
+                        elseif row.Type=="Slider" then
+                            if type(row.Value)~="number" or row.Value~=row.Value or math.abs(row.Value)==math.huge then error("Invalid slider")end
+                            option:SetValue(row.Value)
+                        elseif row.Type=="Input" then
+                            if type(row.Value)~="string" then error("Invalid input")end
+                            option:SetValue(row.Value)
+                        elseif row.Type=="Dropdown" then
+                            if type(row.Value)~="string" and type(row.Value)~="table" and type(row.Value)~="number" and row.Value~=nil then error("Invalid selection")end
+                            option:SetValue(row.Value)
+                        end
+                        end)
+                        if not applied then partial=true end
                     end
                 end
-                local safe=data.Toggles.SafeModeToggle~=false
-                if library.Toggles.SafeModeToggle then library.Toggles.SafeModeToggle:SetValue(safe)end
+                local safe=data.Toggles.SafeModeToggle
+                if library.Toggles.SafeModeToggle and type(safe)=="boolean"then library.Toggles.SafeModeToggle:SetValue(safe)end
                 for key,enabled in pairs(data.Toggles)do
                     local toggle=library.Toggles[key]
                     if key~="SafeModeToggle" and toggle and enabled==true then
                         -- Farming callbacks can yield for as long as a feature runs.
                         task.spawn(function()
-                            if not library.Unloaded then pcall(function()
+                            if not library.Unloaded and current==generation then pcall(function()
                                 local disabled=toggle.Disabled
                                 toggle:SetDisabled(false)
                                 toggle:SetValue(true)
@@ -190,52 +231,70 @@ return function(library,tab)
                 if startup and data.Toggles.HideGuiToggle==true and library.Toggled then library:Toggle()end
             end)
             loading=false
-            if not library.Unloaded then library:Notify(ok and "Configuration loaded" or "Configuration could not be fully applied",4)end
+            library.ProfileLoading=false
+            library.ProfileLoaded=true
+            if not library.Unloaded then library:Notify(ok and not partial and "Configuration loaded" or "Configuration could not be fully applied",4)end
         end)
     end
+    -- Kept for older replay call sites: a hop must never persist temporary settings.
     library.PrepareTeleportSettings=function()
-        prepare()
-        writefile(path("teleport_resume"),codec:JSONEncode(capture()))
+        return true
     end
     group:AddInput("ProfileName",{Text="Configuration name",Default="default",Placeholder="Letters, numbers, dash or underscore"})
-    group:AddButton({Text="Save configuration",Func=function()action(function()
-        prepare() writefile(path(name()),codec:JSONEncode(capture())) library:Notify("Configuration saved",3)
+    local autoload=group:AddLabel("Autoload: none")
+    group:AddButton({Text="Save Settings",Func=function()action(function()
+        local value=name()
+        if not validName(value)then error("Invalid profile")end
+        local text=codec:JSONEncode(capture())
+        decode(text)
+        prepare()
+        if isfile(path(value))then
+            local old=readfile(path(value))
+            if pcall(decode,old)then writefile(path(value)..".bak",old)end
+        end
+        writefile(path(value),text)
+        decode(readfile(path(value)))
+        library:Notify("Settings saved",3)
     end)end})
     group:AddButton({Text="Load configuration",Func=function()action(function()load(name())end)end})
     group:AddButton({Text="Delete configuration",DoubleClick=true,Func=function()action(function()
-        prepare()
+        if not ready()then error("Local storage unavailable")end
         if type(delfile)~="function" then error("Delete unavailable")end
         local value=name()
         if isfile(path(value)) then delfile(path(value))end
-        if isfile(folder.."/autoload.txt") and readfile(folder.."/autoload.txt")==value then delfile(folder.."/autoload.txt")end
+        if isfile(path(value)..".bak")then delfile(path(value)..".bak")end
+        if isfile(folder.."/autoload.txt") and readfile(folder.."/autoload.txt")==value then
+            delfile(folder.."/autoload.txt")autoload:SetText("Autoload: none")
+        end
         library:Notify("Configuration deleted",3)
     end)end})
-    local autoload=group:AddLabel("Autoload: none")
     group:AddButton({Text="Autoload this configuration",Func=function()action(function()
-        prepare() local value=name()
+        if not ready()then error("Local storage unavailable")end
+        local value=name()
         if not isfile(path(value)) then error("Save configuration first")end
+        readProfile(value)
         writefile(folder.."/autoload.txt",value)
+        if readfile(folder.."/autoload.txt")~=value then error("Autoload selection was not saved")end
         autoload:SetText("Autoload: "..value)
+        library:Notify("Autoload selection saved",3)
     end)end})
     group:AddButton({Text="Clear autoload",Func=function()action(function()
-        prepare()
-        if type(delfile)~="function" then error("Delete unavailable")end
-        if isfile(folder.."/autoload.txt") then delfile(folder.."/autoload.txt")end
+        if not ready()then error("Local storage unavailable")end
+        if isfile(folder.."/autoload.txt")then
+            if type(delfile)~="function"then error("Delete unavailable")end
+            delfile(folder.."/autoload.txt")
+            if isfile(folder.."/autoload.txt")then error("Autoload selection was not cleared")end
+        end
         autoload:SetText("Autoload: none")
+        library:Notify("Autoload cleared",3)
     end)end})
     return function()
     if ready() then
         local chosen=false
         local ok=pcall(function()
-            if getgenv().LarpZeroResumeSettings and isfile(path("teleport_resume")) then
-                local value=isfile(folder.."/autoload.txt")and readfile(folder.."/autoload.txt")or "default"
-                if value:match("^[%w_%-]+$")and #value<=48 then library.Options.ProfileName:SetValue(value)end
-                load("teleport_resume",true)
-                chosen=true
-            end
             if not chosen and isfile(folder.."/autoload.txt") then
                 local value=readfile(folder.."/autoload.txt")
-                if value:match("^[%w_%-]+$") and #value<=48 and isfile(path(value)) then
+                if validName(value) and (isfile(path(value))or isfile(path(value)..".bak")) then
                     library.Options.ProfileName:SetValue(value)
                     autoload:SetText("Autoload: "..value)
                     load(value,true)
@@ -243,12 +302,10 @@ return function(library,tab)
                 end
             end
         end)
-        if not chosen and getgenv().LarpZeroResumeSettings then
-            pcall(function()load("teleport_resume",true)end)
-        end
         getgenv().LarpZeroResumeSettings=nil
+        if not chosen then library.ProfileLoaded=true end
         if not ok then library:Notify("Saved configuration could not be opened",4)end
-    else group:AddLabel("Local file storage is unavailable in this executor.",true)end
+    else library.ProfileLoaded=true group:AddLabel("Local file storage is unavailable in this executor.",true)end
     end
 end
 
@@ -12746,7 +12803,7 @@ local function MobScanner()
                         break
                     end
                     UpdateInvincibility = ISV.MobTable[Mob]
-                    task.wait()
+                    task.wait(.1)
                 until UpdateInvincibility
                 if UpdateInvincibility then
                     if Value then
@@ -12761,12 +12818,12 @@ local function MobScanner()
                 local BigNumber = math.huge
                 local function ValidMob(Mob, MobName)
                     local IsDebug = ISV.Debug
-                    IsAliveMobs += 1
+                    
                     if Mob.Parent and Mob.Parent == Workspace.Characters then
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                     if not MobName then
@@ -12776,7 +12833,7 @@ local function MobScanner()
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                     if Blockers[MobName] then
@@ -12785,7 +12842,7 @@ local function MobScanner()
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         BlockerHitbox.Name = "Collider"
@@ -12806,14 +12863,14 @@ local function MobScanner()
                                 break
                             end
                             MobData = rMob:GetMobData(Mob)
-                            task.wait()
+                            task.wait(.1)
                         until MobData
 
                         if MobData and (MobData.IsHunterPet or MobData.CanAttackMobs or MobData.CanAttackEntities) then
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
 
@@ -12864,30 +12921,98 @@ local function MobScanner()
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                 end
-local registering=setmetatable({},{__mode="k"})
-                local function RegisterMob(mob)
-                    if not mob or not mob.Parent or registering[mob]or ISV.MobTable[mob]then return end
-                    local properties=mob:FindFirstChild("HealthProperties")
-                    local health=properties and properties:FindFirstChild("Health")
-                    if health and health.Value<=0 then return end
-                    registering[mob]=true
-                    pcall(ValidMob,mob)
-                    registering[mob]=nil
-                end
-                ConnectionTable.ConnectMobFolder=Mobs.ChildAdded:Connect(function(mob)task.spawn(RegisterMob,mob)end)
-                                ConnectionTable["ConnectMobCreated"] = Remotes:WaitForChild("Health_InstanceAdded").OnClientEvent:Connect(function(Mob)
-                    repeat task.wait() until Mob.Parent ~= ReplicatedStorage
+local MobRegistry=(function()
+-- One registration worker per candidate; folder events handle normal spawn/despawn.
+local Registry={}
+function Registry.Create(deps)
+    local pending=setmetatable({},{__mode="k"})
+    local retry=setmetatable({},{__mode="k"})
+    local stopped=false
+    local folder,added,removed
+    local nextPoll=0
+    local registry={}
+    local function count()
+        local total=0
+        for _ in pairs(deps.Entries)do total+=1 end
+        deps.Count(total)
+    end
+    function registry.Remove(mob)
+        deps.Entries[mob]=nil
+        retry[mob]=nil
+        if deps.ClearTarget then deps.ClearTarget(mob)end
+        count()
+    end
+    local function eligible(mob)
+        if not mob or mob.Parent~=folder then return false end
+        local properties=mob:FindFirstChild("HealthProperties")
+        local health=properties and properties:FindFirstChild("Health")
+        return not health or health.Value>0
+    end
+    function registry.Register(mob)
+        if stopped or deps.Stopped()or not eligible(mob)or pending[mob]or deps.Entries[mob]
+            or (retry[mob]or 0)>deps.Now()then return end
+        pending[mob]=true
+        deps.Spawn(function()
+            if stopped or deps.Stopped()or not eligible(mob)then pending[mob]=nil return end
+            pcall(deps.Validate,mob)
+            pending[mob]=nil
+            if stopped or deps.Stopped()or not eligible(mob)then deps.Entries[mob]=nil
+            elseif not deps.Entries[mob]then retry[mob]=deps.Now()+5 end
+            count()
+        end)
+    end
+    function registry.Poll()
+        if stopped or deps.Stopped()or deps.Now()<nextPoll then return end
+        nextPoll=deps.Now()+1
+        local current=deps.Folder()
+        if current~=folder then
+            if added then added:Disconnect()end
+            if removed then removed:Disconnect()end
+            folder=current
+            if folder then
+                added=folder.ChildAdded:Connect(registry.Register)
+                removed=folder.ChildRemoved:Connect(registry.Remove)
+            end
+        end
+        for mob in pairs(deps.Entries)do if not eligible(mob)then registry.Remove(mob)end end
+        if folder then for _,mob in ipairs(folder:GetChildren())do registry.Register(mob)end end
+    end
+    function registry.Stop()
+        stopped=true
+        if added then added:Disconnect()end
+        if removed then removed:Disconnect()end
+        for mob in pairs(deps.Entries)do deps.Entries[mob]=nil end
+        count()
+    end
+    return registry
+end
+return Registry
+
+end)().Create({
+    Entries=ISV.MobTable,Now=time,Spawn=task.spawn,
+    Stopped=function()return KillSwitch or ScriptUnloaded end,
+    Folder=function()return Workspace:FindFirstChild("Mobs")end,
+    Validate=ValidMob,Count=function(value)IsAliveMobs=value end,
+    ClearTarget=function(mob)
+        if CurrentMob==mob then CurrentMob=nil end
+        if TeleportMob==mob then TeleportMob=nil end
+    end,
+})
+Library:OnUnload(MobRegistry.Stop)
+local RegisterMob=MobRegistry.Register
+                ConnectionTable["ConnectMobCreated"] = Remotes:WaitForChild("Health_InstanceAdded").OnClientEvent:Connect(function(Mob)
+                    -- Folder ChildAdded handles models whose health event arrives before parenting.
                     RegisterMob(Mob)
                 end)
                 ConnectionTable["ConnectMobDied"] = Remotes:WaitForChild("Mobs_MobDied", math.huge).OnClientEvent:Connect(function(Name, Mob)
                     local CheckTable = ISV.MobTable[Mob]
                     if CheckTable then
-                        ISV.MobTable[Mob] = nil
-                        IsAliveMobs -= 1
+                        MobRegistry.Remove(Mob)
+                        
                         if ISV.Debug then
                             
                         end
@@ -12896,16 +13021,12 @@ local registering=setmetatable({},{__mode="k"})
                 for Index, Mob in Mobs:GetChildren() do
                     task.spawn(RegisterMob,Mob)
                 end
-                local nextMobScan=0
-                while not KillSwitch do
-                    if time()>=nextMobScan then
-                        nextMobScan=time()+1
-                        local folder=Workspace:FindFirstChild("Mobs")
-                        if folder then for _,mob in ipairs(folder:GetChildren())do task.spawn(RegisterMob,mob)end end
-                    end
+                while not KillSwitch and not ScriptUnloaded do
+                    MobRegistry.Poll()
+                    if not PlayerRoot or not PlayerRoot.Parent then task.wait(.1)continue end
                     if not CanTarget or SV.QuotaPaused then
                         CurrentMob = nil
-                        task.wait()
+                        task.wait(.1)
                         continue
                     end
 
@@ -12924,18 +13045,18 @@ local registering=setmetatable({},{__mode="k"})
                             if ISV.Debug then
                                 
                             end
-                            TableReference[Mob] = nil
-                            IsAliveMobs -= 1
+                            MobRegistry.Remove(Mob)
+                            
                             continue
                         end
                         local HealthProperties = Mob:FindFirstChild("HealthProperties")
                         local Health = HealthProperties and HealthProperties:FindFirstChild("Health")
-                        if Health and Health.Value == 0 then
+                        if Health and Health.Value <= 0 then
                             if ISV.Debug then
                                 
                             end
-                            TableReference[Mob] = nil
-                            IsAliveMobs -= 1
+                            MobRegistry.Remove(Mob)
+                            
                             continue
                         end
                         if AddedTable.IsBlocker then
@@ -12998,7 +13119,7 @@ local registering=setmetatable({},{__mode="k"})
                     else
                         CurrentMob = nil
                     end
-                    task.wait()
+                    task.wait(.1)
                 end
             else
                 PriorityMobs["BOSSSeraphiel"] = nil
@@ -13009,12 +13130,12 @@ local registering=setmetatable({},{__mode="k"})
                 end
                 local function ValidMob(Mob, MobName)
                     local IsDebug = ISV.Debug
-                    IsAliveMobs += 1
+                    
                     if Mob.Parent and Mob.Parent == Workspace.Characters then
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                     if not MobName then
@@ -13024,7 +13145,7 @@ local registering=setmetatable({},{__mode="k"})
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                     if Blockers[MobName] then
@@ -13044,14 +13165,14 @@ local registering=setmetatable({},{__mode="k"})
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         if DontAttackBosses[MobName] then
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         local FromSpawnPart = Mob:WaitForChild("FromSpawnPart", 2)
@@ -13059,7 +13180,7 @@ local registering=setmetatable({},{__mode="k"})
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         local MobProperties = Mob:WaitForChild("MobProperties", 2)
@@ -13068,7 +13189,7 @@ local registering=setmetatable({},{__mode="k"})
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         local ShrinkMob = ShrinkCollider[MobName]
@@ -13094,26 +13215,94 @@ local registering=setmetatable({},{__mode="k"})
                         end
                     end
                 end
-local registering=setmetatable({},{__mode="k"})
-                local function RegisterMob(mob)
-                    if not mob or not mob.Parent or registering[mob]or ISV.MobTable[mob]then return end
-                    local properties=mob:FindFirstChild("HealthProperties")
-                    local health=properties and properties:FindFirstChild("Health")
-                    if health and health.Value<=0 then return end
-                    registering[mob]=true
-                    pcall(ValidMob,mob)
-                    registering[mob]=nil
-                end
-                ConnectionTable.ConnectMobFolder=Mobs.ChildAdded:Connect(function(mob)task.spawn(RegisterMob,mob)end)
-                                ConnectionTable["ConnectMobCreated"] = Remotes:WaitForChild("Health_InstanceAdded").OnClientEvent:Connect(function(Mob)
-                    repeat task.wait() until Mob.Parent ~= ReplicatedStorage
+local MobRegistry=(function()
+-- One registration worker per candidate; folder events handle normal spawn/despawn.
+local Registry={}
+function Registry.Create(deps)
+    local pending=setmetatable({},{__mode="k"})
+    local retry=setmetatable({},{__mode="k"})
+    local stopped=false
+    local folder,added,removed
+    local nextPoll=0
+    local registry={}
+    local function count()
+        local total=0
+        for _ in pairs(deps.Entries)do total+=1 end
+        deps.Count(total)
+    end
+    function registry.Remove(mob)
+        deps.Entries[mob]=nil
+        retry[mob]=nil
+        if deps.ClearTarget then deps.ClearTarget(mob)end
+        count()
+    end
+    local function eligible(mob)
+        if not mob or mob.Parent~=folder then return false end
+        local properties=mob:FindFirstChild("HealthProperties")
+        local health=properties and properties:FindFirstChild("Health")
+        return not health or health.Value>0
+    end
+    function registry.Register(mob)
+        if stopped or deps.Stopped()or not eligible(mob)or pending[mob]or deps.Entries[mob]
+            or (retry[mob]or 0)>deps.Now()then return end
+        pending[mob]=true
+        deps.Spawn(function()
+            if stopped or deps.Stopped()or not eligible(mob)then pending[mob]=nil return end
+            pcall(deps.Validate,mob)
+            pending[mob]=nil
+            if stopped or deps.Stopped()or not eligible(mob)then deps.Entries[mob]=nil
+            elseif not deps.Entries[mob]then retry[mob]=deps.Now()+5 end
+            count()
+        end)
+    end
+    function registry.Poll()
+        if stopped or deps.Stopped()or deps.Now()<nextPoll then return end
+        nextPoll=deps.Now()+1
+        local current=deps.Folder()
+        if current~=folder then
+            if added then added:Disconnect()end
+            if removed then removed:Disconnect()end
+            folder=current
+            if folder then
+                added=folder.ChildAdded:Connect(registry.Register)
+                removed=folder.ChildRemoved:Connect(registry.Remove)
+            end
+        end
+        for mob in pairs(deps.Entries)do if not eligible(mob)then registry.Remove(mob)end end
+        if folder then for _,mob in ipairs(folder:GetChildren())do registry.Register(mob)end end
+    end
+    function registry.Stop()
+        stopped=true
+        if added then added:Disconnect()end
+        if removed then removed:Disconnect()end
+        for mob in pairs(deps.Entries)do deps.Entries[mob]=nil end
+        count()
+    end
+    return registry
+end
+return Registry
+
+end)().Create({
+    Entries=ISV.MobTable,Now=time,Spawn=task.spawn,
+    Stopped=function()return KillSwitch or ScriptUnloaded end,
+    Folder=function()return Workspace:FindFirstChild("Mobs")end,
+    Validate=ValidMob,Count=function(value)IsAliveMobs=value end,
+    ClearTarget=function(mob)
+        if CurrentMob==mob then CurrentMob=nil end
+        if TeleportMob==mob then TeleportMob=nil end
+    end,
+})
+Library:OnUnload(MobRegistry.Stop)
+local RegisterMob=MobRegistry.Register
+                ConnectionTable["ConnectMobCreated"] = Remotes:WaitForChild("Health_InstanceAdded").OnClientEvent:Connect(function(Mob)
+                    -- Folder ChildAdded handles models whose health event arrives before parenting.
                     RegisterMob(Mob)
                 end)
                 ConnectionTable["ConnectMobDied"] = Remotes:WaitForChild("Mobs_MobDied", math.huge).OnClientEvent:Connect(function(Name, Mob)
                     local CheckTable = ISV.MobTable[Mob]
                     if CheckTable then
-                        ISV.MobTable[Mob] = nil
-                        IsAliveMobs -= 1
+                        MobRegistry.Remove(Mob)
+                        
                         if ISV.Debug then
                             
                         end
@@ -13127,7 +13316,7 @@ local registering=setmetatable({},{__mode="k"})
                 while not KillSwitch do
                     if not CanTarget or SV.QuotaPaused then
                         CurrentMob = nil
-                        task.wait()
+                        task.wait(.1)
                         continue
                     end
                     local TableReference = ISV.MobTable
@@ -13139,8 +13328,8 @@ local registering=setmetatable({},{__mode="k"})
 
                     for Mob, AddedTable in TableReference do
                         if not Mob.Parent then
-                            TableReference[Mob] = nil
-                            IsAliveMobs -= 1
+                            MobRegistry.Remove(Mob)
+                            
                             if ISV.Debug then
                                 
                             end
@@ -13148,9 +13337,9 @@ local registering=setmetatable({},{__mode="k"})
                         end
                         local MobHealthProperties = Mob:FindFirstChild("HealthProperties")
                         local MobHealth = MobHealthProperties and MobHealthProperties:FindFirstChild("Health")
-                        if MobHealth and MobHealth.Value == 0 then
-                            TableReference[Mob] = nil
-                            IsAliveMobs -= 1
+                        if MobHealth and MobHealth.Value <= 0 then
+                            MobRegistry.Remove(Mob)
+                            
                             if ISV.Debug then
                                 
                             end
@@ -13198,7 +13387,7 @@ local registering=setmetatable({},{__mode="k"})
                     else
                         CurrentMob = nil
                     end
-                    task.wait()
+                    task.wait(.1)
                 end
             end
         end)
@@ -13266,6 +13455,7 @@ local function RestartDungeon(RestartBypass)
     if not (SV.ReplayMission or SV.DoingGuildDungeon or RestartBypass) then 
         return
     end
+    local replayGeneration=SV.ReplayGeneration
     if SV.TowerChestDelay then
         task.wait(6)
     end
@@ -13278,6 +13468,12 @@ local function RestartDungeon(RestartBypass)
     SV.TransitionPending=true
     Library:Notify("Teleporting...", SV.RestartDungeonDelay)
     task.wait(SV.RestartDungeonDelay)
+    if replayGeneration~=SV.ReplayGeneration then return end
+    if ScriptUnloaded or KillSwitch or SV.QuotaPaused
+        or (not RestartBypass and not(SV.ReplayMission or SV.DoingGuildDungeon))then
+        SV.TransitionPending=nil
+        return
+    end
     if IsTower then
         Difficulty = nil
     end
@@ -13380,6 +13576,11 @@ local function RestartDungeon(RestartBypass)
 end
 
 SetGlobal("collect chests")
+local function WaitBetweenChestRequests()
+    local delay=tonumber(SV.CollectChestsDelay)or .1
+    if delay~=delay then delay=.1 end
+    task.wait(math.clamp(delay,.01,5))
+end
 local function CollectChests()
     local ExtraChestCheck = true
     local ChestDrops = {}
@@ -13400,6 +13601,9 @@ local function CollectChests()
                 break
             end
 
+            if ScriptUnloaded or KillSwitch then break end
+            if ChestIndex>1 then WaitBetweenChestRequests()end
+            if ScriptUnloaded or KillSwitch then break end
             local ChestPrize
             if ChestIndex == 1 then
                 ChestPrize = MissionPrize:InvokeServer(true)
@@ -13433,8 +13637,13 @@ local function CollectTowerChests()
             local OpenChest = Remotes:WaitForChild("Chests_OpenChest", math.huge)
             if SV.CanRequire and debug and getupvalue then
                 local ChestScript = debug.getupvalue(require(Chests).Start, 12)
+                local requested=0
                 for ChestKey, ChestPath in ChestScript do
+                    if ScriptUnloaded or KillSwitch then break end
+                    if requested>0 then WaitBetweenChestRequests()end
+                    if ScriptUnloaded or KillSwitch then break end
                     OpenChest:FireServer(ChestKey)
+                    requested+=1
                 end
             else
                 local ChestNames = {
@@ -13567,25 +13776,35 @@ function Policy.ShouldSell(item,config)
     if item.kind~="Weapon" and item.kind~="Armor" and item.kind~="Pet" and item.kind~="Charm" then return false end
     if item.kind=="Pet" and not config.includePets then return false end
     if item.kind=="Charm" and not config.includeCharms then return false end
-    if type(item.rarity)~="number" or item.rarity==7 then return false end
+    if type(item.rarity)~="number" or item.rarity~=item.rarity or item.rarity%1~=0
+        or item.rarity<1 or item.rarity>=7 then return false end
     local tier=Policy.Tier(config.keepTier)
     if tier==nil then return false end
-    if tier>0 and item.rarity>=tier then return false end
-    if config.keepPerks then
+    local selectedPerks=config.selectedPerks
+    local requiredPerks=config.keepPerks and type(selectedPerks)=="table" and next(selectedPerks)~=nil
+    -- A selected, graded perk is the required keep rule when enabled. Tier-only
+    -- protection is the fallback when no perk filter is active. Perk protection
+    -- remains independent of tier, including the None selection.
+    if not requiredPerks then return not(tier>0 and item.rarity>=tier)end
+    if item.perks~=nil and type(item.perks)~="table"then return false end
+    if requiredPerks then
         for name,value in pairs(item.perks or {}) do
-            local selected=(config.selectedPerks or {})[name]
+            local selected=selectedPerks[name]
             if selected then
+                if type(selected)~="table"then return false end
                 local pet=item.kind=="Pet" or item.kind=="Charm"
                 local threshold=pet and selected.PetPerkValue or selected.PerkValue
                 local range=selected.Ranges and selected.Ranges[item.kind]
                 if range then threshold=range[selected.LowerMax and 1 or 2]end
                 threshold=tonumber(threshold or selected.PerkValue)
                 value=tonumber(value)
-                if not threshold or not value then return false end
+                if not threshold or not value or threshold~=threshold or value~=value
+                    or math.abs(threshold)==math.huge or math.abs(value)==math.huge then return false end
                 if selected.NegativeActive and value<0 then value=-value end
                 -- Match the native whole-percent perk-grade rounding.
                 value=math.floor(value*100+.5)/100
                 local offset=tonumber(config.offset) or 0
+                if offset~=offset or math.abs(offset)==math.huge or offset<0 then return false end
                 if selected.LowerMax then
                     if value<=threshold+offset then return false end
                 elseif value>=threshold-offset then return false end
@@ -13723,13 +13942,21 @@ local function IsTowerEgg(Item)
 end
 
 SetGlobal("sell item")
-local function SellItem(Item)
+InventoryBusy.Pending=setmetatable({},{__mode="k"})
+local function SellItem(Item,validate)
+    if InventoryBusy.Pending[Item]then return false end
     if not IsInventoryItem(Item) or ProtectedInventoryItem(Item) or Item:FindFirstChild("Count") then return false end
+    InventoryBusy.Pending[Item]=true
     -- Match the game's public client adapter, including item-reference conversion.
     local done,ok,result=false,false,nil
     task.spawn(function()
-        ok,result=GameCall(function()return require(Drops):SellItems(LocalPlayer,{Item})end)
+        ok,result=GameCall(function()
+            if ScriptUnloaded or not IsInventoryItem(Item)or ProtectedInventoryItem(Item)
+                or Item:FindFirstChild("Count")or (validate and not validate())then return false end
+            return require(Drops):SellItems(LocalPlayer,{Item})
+        end)
         done=true
+        InventoryBusy.Pending[Item]=nil
     end)
     local deadline=os.clock()+8
     repeat task.wait(0.1) until done or ScriptUnloaded or os.clock()>=deadline
@@ -13940,7 +14167,10 @@ local function FindPart(Location, PartData)
 
     local TouchInterest
     if PartData.DescendantCheck then
-        for Index, Part in MainParent:GetDescendants() do
+        local primary=MainParent:IsA("Model")and MainParent.PrimaryPart
+        local primaryTouch=primary and primary:FindFirstChild("TouchInterest")
+        if primaryTouch then MainParent=primary TouchInterest=primaryTouch end
+        for Index, Part in (TouchInterest and {}or MainParent:GetDescendants()) do
             if Part.ClassName == "TouchTransmitter" then
                 MainParent = Part.Parent
                 TouchInterest = Part
@@ -14230,14 +14460,24 @@ function Schedule.Create(environment,server,clock)
         if duration~=duration or duration<0 then duration=0 end
         state.ReadyAt[key]=clock()+duration
     end
-    function controller.Order(attacks,extra)
+    function controller.Dispatch(key,cooldown,delay,callback,...)
+        if not controller.Ready(key)or not controller.Ready("dispatch")then return false end
+        controller.Reserve(key,cooldown)
+        controller.Reserve("dispatch",delay)
+        -- One transient dispatch error must not terminate the entire aura.
+        -- Keep its reservations, so failure cannot cause an immediate retry burst.
+        return pcall(callback,...)
+    end
+    function controller.Order(attacks,extra,distance)
         local now=clock()
         local result={}
         for index,attack in ipairs(attacks)do
             local cooldown=math.max(0,(tonumber(attack.Cooldown)or 0)+(tonumber(extra)or 0))
             if now-(attack.LastUsed or 0)>=cooldown then
                 attack.ReadySince=attack.ReadySince or now
-                result[#result+1]={Attack=attack,Index=index,Score=(now-attack.ReadySince)/math.clamp(cooldown,.2,3)}
+                if distance==nil or (type(attack.Distance)=="number" and distance<=attack.Distance)then
+                    result[#result+1]={Attack=attack,Index=index,Score=(now-attack.ReadySince)/math.clamp(cooldown,.2,3)}
+                end
             else attack.ReadySince=nil end
         end
         table.sort(result,function(a,b)
@@ -14395,8 +14635,13 @@ local function RecycleFromInventory(Method, SelectedItems)
             local RemoveHashTags = string.gsub(StandardizeCommas, "#", "")
             local SplitHexes = string.split(RemoveHashTags, ",")
             for Index, Hex in SplitHexes do
-                if Hex ~= "" and Hex ~= " " then
-                    table.insert(HexesToSave, string.lower(Hex))
+                local normalized=Hex:match("^%s*(.-)%s*$"):lower()
+                if normalized~=""then
+                    if not normalized:match("^%x+$")or #normalized>6 then
+                        Library:Notify("Use hexadecimal color prefixes of 1 to 6 digits; no cosmetics were changed",4)
+                        return
+                    end
+                    table.insert(HexesToSave,normalized)
                 end
             end
         end
@@ -14424,7 +14669,7 @@ local function RecycleFromInventory(Method, SelectedItems)
                 if CheckDye then
                     local GoodDye
                     for Index, Dye in HexesToSave do
-                        if string.match(CheckDye, "^"..Dye) then
+                        if CheckDye:lower():sub(1,#Dye)==Dye:lower() then
                             GoodDye = true
                             break
                         end
@@ -14458,15 +14703,21 @@ local function RecycleFromInventory(Method, SelectedItems)
 end
 
 SetGlobal("item sell check")
-local function ItemSellCheck(item,manual)
+InventoryBusy.Generation=0
+local function ItemSellCheck(item,manual,expectedGeneration)
     if not item or InventoryBusy[item] then return end
     InventoryBusy[item]=true
     SellItemCheck+=1
-    pcall(function()
+    local function cancelled()
+        return ScriptUnloaded or (Library and Library.ProfileLoading)or (not manual and (not Toggles.AutoSellToggle.Value
+            or (expectedGeneration~=nil and expectedGeneration~=InventoryBusy.Generation)))
+    end
+    local ok,deferred=pcall(function()
         if not manual then task.wait(1)end
         local deadline=os.clock()+8
         while EquipInProgress>0 and not ScriptUnloaded and os.clock()<deadline do task.wait(0.1)end
-        if ScriptUnloaded or EquipInProgress>0 or not IsInventoryItem(item) then return end
+        if cancelled()or not IsInventoryItem(item) then return end
+        if EquipInProgress>0 then return true end
         if not manual and not Toggles.AutoSellToggle.Value then return end
         local rarity,expectedPerks=GetRarity(item)
         local metadataDeadline=os.clock()+8
@@ -14482,13 +14733,14 @@ local function ItemSellCheck(item,manual)
                     if range and range[1]>0 and perk.PerkValue.Value==0 then complete=false break end
                 end
                 if complete then break end
-                if ScriptUnloaded or not IsInventoryItem(item)or(not manual and not Toggles.AutoSellToggle.Value)
+                if cancelled()or not IsInventoryItem(item)
                     or os.clock()>=metadataDeadline then return end
                 task.wait(.1)
             until false
         end
         local ref=SV.Items and SV.Items[item.Name]
         local perks={}
+        local observed={}
         if SV.KeepPerks and expectedPerks then
             for index=1,expectedPerks do
                 if not item:FindFirstChild("Perk"..index) then return end
@@ -14498,6 +14750,7 @@ local function ItemSellCheck(item,manual)
             if child.Name:match("^Perk%d+$") then
                 local value=child:FindFirstChild("PerkValue")
                 if not value or child.Value=="" then return end
+                observed[#observed+1]={Child=child,Value=value,Name=child.Value,Roll=value.Value}
                 local prior=perks[child.Value]
                 local selected=SV.SelectedPerks and SV.SelectedPerks[child.Value]
                 local roll=value.Value
@@ -14511,15 +14764,29 @@ local function ItemSellCheck(item,manual)
             protected=ProtectedInventoryItem(item),stackable=item:FindFirstChild("Count")~=nil,
             equipped=not IsInventoryItem(item),towerEgg=IsTowerEgg(item)==true,
         }
-        local config={
+        local function configuration()return {
             keepTier=KeepTier,includePets=SV.IncludePets,includeCharms=SV.IncludeCharms,
             sellTowerEggs=SV.SellTowerEggs,keepPerks=SV.KeepPerks,
             selectedPerks=SV.SelectedPerks,offset=OffsetMax,
-        }
-        if InventoryPolicy.ShouldSell(state,config) and IsInventoryItem(item) and not ProtectedInventoryItem(item) then SellItem(item)end
+        }end
+        local config=configuration()
+        if not cancelled()and InventoryPolicy.ShouldSell(state,config) and IsInventoryItem(item) and not ProtectedInventoryItem(item) then
+            SellItem(item,function()
+                if cancelled()or EquipInProgress~=0 then return false end
+                local current,expected=GetRarity(item)
+                if current~=rarity then return false end
+                if SV.KeepPerks and expected and #observed<expected then return false end
+                for _,row in ipairs(observed)do
+                    if item:FindFirstChild(row.Child.Name)~=row.Child or row.Child.Value~=row.Name
+                        or row.Child:FindFirstChild("PerkValue")~=row.Value or row.Value.Value~=row.Roll then return false end
+                end
+                return InventoryPolicy.ShouldSell(state,configuration())
+            end)
+        end
     end)
     InventoryBusy[item]=nil
     SellItemCheck=math.max(0,SellItemCheck-1)
+    return ok and deferred==true
 end
 
 SetGlobal("check score")
@@ -14600,8 +14867,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.07-r19")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","63190e63bc3f")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.10-r24-rc1")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","cfbebde997f0")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -14631,8 +14898,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | r19",
-    Footer = "Build 2026.11.07-r19",
+    Title = "Larp Zero | rc1",
+    Footer = "Build 2026.11.10-r24-rc1",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -14761,7 +15028,7 @@ SecondTab:AddSlider("DelayAttackSlider", {
     Max = 0.5,
     Rounding = 2,
     Compact = true,
-    Tooltip = "When time is added the script will wait that long between performing attacks. When fighting bosses this setting is ignored completely.",
+    Tooltip = "Minimum delay between attack dispatches, including bosses. Skill cooldowns and the configured added delay still apply.",
     Callback = function(ChangedValue)
         if ChangedValue == 0 then
             DelayAttacks = false
@@ -15723,7 +15990,7 @@ FirstTab:AddDropdown("AutoSellDropdown", {
 })
     FirstTab:AddDivider()
 CreateToggles({
-    { "KeepSelectedPerkToggle", Text = "Keep selected perks", Tooltip = "By default only S+ perks are kept", Tab = FirstTab, AttachedFunction = ToggleValue, FunctionValue = "KeepPerks" }
+    { "KeepSelectedPerkToggle", Text = "Keep selected perks", Tooltip = "With selected perks enabled, only matching perk grades protect items, across all tiers. With no selected perks, Keep tiers applies. S+ grades are required by default.", Tab = FirstTab, AttachedFunction = ToggleValue, FunctionValue = "KeepPerks" }
 })
 local SavePerkTable = {
     ["Gold Hoarder"] = { PerkValue = 0.2, PetPerkValue = 0.2, PerkName = "GoldDrop" },
@@ -16120,25 +16387,33 @@ end -- for unloaded classes tab
 if not SV.InventoryTab then
 SetGlobal("equipment tab function")
 if IsWorld or IsDungeon then
-local AutoSellGeneration=0
 Toggles.AutoSellToggle:OnChanged(function(enabled)
-    AutoSellGeneration+=1
-    local generation=AutoSellGeneration
+    InventoryBusy.Generation+=1
+    local generation=InventoryBusy.Generation
     DisconnectVariable("ConnectInventory")
     DisconnectVariable("ConnectInventoryFields")
     if not enabled then return end
     task.spawn(function()
         local items=ProfileInventory and ProfileInventory:WaitForChild("Items",5)
-        if not items or generation~=AutoSellGeneration or ScriptUnloaded then return end
+        if not items or generation~=InventoryBusy.Generation or ScriptUnloaded then return end
         local watched=setmetatable({},{__mode="k"})
         local queued=setmetatable({},{__mode="k"})
         local function enqueue(item)
             if queued[item]or not watched[item]then return end
             queued[item]=true
             task.delay(.25,function()
-                queued[item]=nil
-                if generation==AutoSellGeneration and not ScriptUnloaded and Toggles.AutoSellToggle.Value
-                    and item.Parent==items then ItemSellCheck(item)end
+                while Library and Library.ProfileLoading and generation==InventoryBusy.Generation
+                    and not ScriptUnloaded and Toggles.AutoSellToggle.Value and item.Parent==items do task.wait(.1)end
+                local recheck=false
+                if generation==InventoryBusy.Generation and not ScriptUnloaded and Toggles.AutoSellToggle.Value
+                    and item.Parent==items then
+                    local profile=Library and Library.ProfileGeneration
+                    local deferred=ItemSellCheck(item,false,generation)
+                    recheck=(deferred==true or (Library and Library.ProfileGeneration~=profile))and item.Parent==items
+                end
+                if recheck then
+                    task.delay(.5,function()queued[item]=nil enqueue(item)end)
+                else queued[item]=nil end
             end)
         end
         ConnectionTable.ConnectInventory=items.ChildAdded:Connect(function(item)
@@ -16651,7 +16926,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.07-r19 [63190e63bc3f]",true)
+cleanSettings:AddLabel("Build: 2026.11.10-r24-rc1 [cfbebde997f0]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -16673,6 +16948,11 @@ local LoadLocalProfile = InstallLocalProfiles(Library, ConfigTab)
 
 task.spawn(function()
     local deadline=os.clock()+90
+    if IsMainMenu then
+        while not Library.GameHandlersReady and not ScriptUnloaded and not KillSwitch and os.clock()<deadline do task.wait(.25)end
+        if Library.GameHandlersReady and not ScriptUnloaded and not KillSwitch then LoadLocalProfile()end
+        return
+    end
     while not ScriptUnloaded and not KillSwitch and os.clock()<deadline do
         local profile=PlayerGui:FindFirstChild("Profile")
         local inventory=profile and profile:FindFirstChild("Inventory")
@@ -16711,7 +16991,6 @@ do
     ConnectionTable.LarpZeroCarryOver=LocalPlayer.OnTeleport:Connect(function(state,placeId)
         if state==Enum.TeleportState.Failed then
             pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",false)
-            Library.CarrySettingsSaved=false
             return
         end
         if state~=Enum.TeleportState.Started
@@ -16720,12 +16999,9 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=4,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=29,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
-        -- Saving preferences must not prevent the native handoff being issued.
-        if not Library.CarrySettingsSaved and type(Library.PrepareTeleportSettings)=="function"then
-            Library.CarrySettingsSaved=pcall(Library.PrepareTeleportSettings)
-        end
+        -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
     cleanSettings:AddLabel(armed and "World Zero hops only / duplicate startup protected"
         or "World Zero hop carry-over unavailable in this executor",true)
@@ -16831,25 +17107,30 @@ if not IsMainMenu then
                     end
                 }
                 repeat
-                    if CombatSchedule.Ready("dispatch") then
-                    for _, Attack in CombatSchedule.Order(Class.Skills,AddedDelay+PlayerPing) do
+                    if CurrentMob and CombatChecks.TargetReady(CurrentMob,ISV.MobTable[CurrentMob])
+                        and not SV.DodgingAttack and not SV.QuotaPaused and not SV.TransitionPending
+                        and PlayerRoot and PlayerRoot.Parent and CombatSchedule.Ready("dispatch") then
+                    local cachedCollider=CurrentMob:FindFirstChild("Collider")
+                    if cachedCollider and cachedCollider:IsA("BasePart")then
+                    local cachedPlayerSurface=PlayerRoot:GetClosestPointOnSurface(cachedCollider.Position)
+                    local cachedMobSurface=cachedCollider:GetClosestPointOnSurface(PlayerRoot.Position)
+                    local cachedDistance=(cachedPlayerSurface-cachedMobSurface).Magnitude
+                    for _, Attack in CombatSchedule.Order(Class.Skills,AddedDelay+PlayerPing,cachedDistance) do
                         if ScriptUnloaded or KillSwitch or not SV.Killaura or generation~=KillauraGeneration then break end
                         if CombatChecks.ManagedBuff(Attack,Toggles.GeneralClassBuffToggle and Toggles.GeneralClassBuffToggle.Value)then
                             Attack.ReadySince=nil
                             continue
                         end
-                        if CurrentMob and CombatChecks.TargetReady(CurrentMob,ISV.MobTable[CurrentMob])
-                            and not SV.DodgingAttack and not SV.QuotaPaused and not SV.TransitionPending then
+                        if CurrentMob then
                             local AttackCooldown = Attack.Cooldown
                             local key=tostring(SV.PlayerClass)..":"..tostring(Attack.Skill)
                             if time() - (Attack.LastUsed or 0) >= AttackCooldown+AddedDelay+PlayerPing and CombatSchedule.Ready(key) and CombatSchedule.Ready("dispatch") then
                                 local AttackType = Attack.Type
-                                local MobCollider = CurrentMob:FindFirstChild("Collider")
+                                local MobCollider = cachedCollider
                                 if MobCollider then
                                     local AttackDistance = Attack.Distance
-                                    local PlayerSurface = PlayerRoot:GetClosestPointOnSurface(MobCollider.Position)
-                                    local MobSurface = MobCollider:GetClosestPointOnSurface(PlayerRoot.Position)
-                                    local Distance = (PlayerSurface - MobSurface).Magnitude
+                                    local MobSurface = cachedMobSurface
+                                    local Distance = cachedDistance
                                     if Distance <= AttackDistance then
                                         if SV.Autofarm and IsBoss then
                                             local TpTime = CurrentMob:GetAttribute("T")
@@ -16860,9 +17141,8 @@ if not IsMainMenu then
                                         local FindAttackType = AttackArgs[AttackType]
                                         if FindAttackType then
                                             if ScriptUnloaded or KillSwitch or not SV.Killaura or generation~=KillauraGeneration then break end
-                                            CombatSchedule.Reserve(key,AttackCooldown+AddedDelay+PlayerPing)
-                                            CombatSchedule.Reserve("dispatch",tonumber(DelayAttacks)or 0)
-                                            FindAttackType(Attack.Skill, MobSurface)
+                                            CombatSchedule.Dispatch(key,AttackCooldown+AddedDelay+PlayerPing,
+                                                tonumber(DelayAttacks)or 0,FindAttackType,Attack.Skill,MobSurface)
                                         else
                                             SV.Killaura = nil
                                             
@@ -16876,6 +17156,7 @@ if not IsMainMenu then
                             end
                         end
                     end
+                    end -- cached collider guard
                     end -- shared dispatch gate
                     task.wait()
                 until not SV.Killaura or generation~=KillauraGeneration
@@ -16934,14 +17215,37 @@ if not IsMainMenu then
         end
     end)
 
+local FarmOffsets=(function()
+-- Effective movement offsets; saved/raw-aura preferences are never overwritten.
+local Offsets={}
+function Offsets.Resolve(x,y,width,native,distanceType)
+    if native then
+        local horizontal=distanceType=="Ranged"and 12 or 3
+        local vertical=distanceType=="Ranged"and 12 or 2
+        x=math.clamp(x,-horizontal,horizontal)
+        y=math.clamp(y,-vertical,vertical)
+    end
+    local radius=x+width/2
+    if math.abs(radius)<.25 then radius=radius<0 and -.25 or .25 end
+    return radius,y
+end
+function Offsets.Rotate(angle,speed,radius)
+    if math.abs(radius)<.001 then return angle end
+    return angle+speed/radius
+end
+return Offsets
+
+end)()
     Toggles.AutoProgressToggle:OnChanged(function(ChangedValue)
+        SV.AutofarmGeneration=(SV.AutofarmGeneration or 0)+1
+        local generation=SV.AutofarmGeneration
         if ChangedValue and SV.SafeMode and not IsDungeon then
             return
         end
 
         local TimeActivated = os.clock()
         AutofarmChanged = CheckForCharacter(TimeActivated)
-        if TimeActivated ~= AutofarmChanged then
+        if TimeActivated ~= AutofarmChanged or generation~=SV.AutofarmGeneration then
             return
         end
 
@@ -16953,9 +17257,13 @@ if not IsMainMenu then
                     PlayerRoot.CanCollide = false
                     local LastCollider
                     local TeleportTween
-                    while SV.Autofarm do
+                    while SV.Autofarm and generation==SV.AutofarmGeneration and not ScriptUnloaded and not KillSwitch do
                         if KillSwitch then
                             break
+                        end
+                        if not PlayerRoot or PlayerRoot.Parent~=LocalPlayer.Character then
+                            if TeleportTween then TeleportTween:Cancel()TeleportTween=nil end
+                            task.wait(.1)continue
                         end
                         if TempStop or HoldForRealTime or EventOverride or SV.QuotaPaused then
                             if TeleportTween then
@@ -16971,10 +17279,10 @@ if not IsMainMenu then
 
                             if MobCollider then
                                 local DistanceFromMob = (PlayerRoot.Position - MobCollider.Position).Magnitude
-                                local PlayerOffset = Xdistance + (MobCollider.Size.X / 2)
-                                RotationAroundMob += MobRotationSpeed / PlayerOffset
+                                local PlayerOffset,PlayerHeight=FarmOffsets.Resolve(Xdistance,Ydistance,MobCollider.Size.X,SV.SafeKillaura,Class and Class.Distance)
+                                RotationAroundMob=FarmOffsets.Rotate(RotationAroundMob,MobRotationSpeed,PlayerOffset)
 
-                                local TargetCFrame = CFrame.new(MobCollider.Position) * CFrame.Angles(0, math.rad(RotationAroundMob), 0) * CFrame.new(PlayerOffset, Ydistance, 0)
+                                local TargetCFrame = CFrame.new(MobCollider.Position) * CFrame.Angles(0, math.rad(RotationAroundMob), 0) * CFrame.new(PlayerOffset, PlayerHeight, 0)
                                 TargetCFrame = CFrame.lookAt(TargetCFrame.Position, Vector3.new(MobCollider.Position.X, TargetCFrame.Position.Y, MobCollider.Position.Z))
 
                                 if MobCollider ~= LastCollider or DistanceFromMob > 200 then
@@ -16986,6 +17294,7 @@ if not IsMainMenu then
                                     PlayerRoot.CFrame = TargetCFrame
                                     LastCollider = MobCollider
                                 else
+                                    if TeleportTween then TeleportTween:Cancel()end
                                     TeleportTween = TweenService:Create(PlayerRoot, TweenInfo.new((PlayerRoot.Position - MobCollider.Position).Magnitude / 70, Enum.EasingStyle.Linear), {CFrame = TargetCFrame})
                                     TeleportTween:Play()
                                 end
@@ -16993,8 +17302,9 @@ if not IsMainMenu then
                                     TeleportMob:SetAttribute("T", time())
                                 end
 
-                                if IsMobCamera and CurrentCamera.CameraSubject ~= TeleportMob then
-                                    CurrentCamera.CameraSubject = TeleportMob
+                                local currentCamera=workspace.CurrentCamera
+                                if IsMobCamera and currentCamera and currentCamera.CameraSubject ~= TeleportMob then
+                                    currentCamera.CameraSubject = TeleportMob
                                 end
                             end
                         else
@@ -17004,8 +17314,9 @@ if not IsMainMenu then
                             end
                         end
                         TeleportStandPart()
-                        task.wait()
+                        task.wait(.05)
                     end
+                    if TeleportTween then TeleportTween:Cancel()end
                 end)
                 if not Success then
                     
@@ -17019,17 +17330,25 @@ if not IsMainMenu then
                             Part.CanCollide = false
                         end
                     end
-                    while SV.Autofarm do
+                    while SV.Autofarm and generation==SV.AutofarmGeneration and not ScriptUnloaded and not KillSwitch do
                         for Part, PartData in TeleportParts do
                             if not SV.StopTeleportingParts and not SV.QuotaPaused then
                                 if PartData.DontTeleport then
                                     continue
                                 end
+                                if PartData.Pending then continue end
                                 if Part.Parent and PartData.TouchPart.Parent then
+                                    PartData.Pending=true
                                     task.spawn(function()
-                                        Part.Position = PlayerRoot.Position
-                                        task.wait(0.1)
-                                        Part.Position = PartData.OriginalLocation
+                                        pcall(function()
+                                            if generation==SV.AutofarmGeneration and SV.Autofarm and not ScriptUnloaded
+                                                and PlayerRoot and PlayerRoot.Parent then
+                                                Part.Position=PlayerRoot.Position
+                                                task.wait(.1)
+                                            end
+                                        end)
+                                        pcall(function()if Part.Parent then Part.Position=PartData.OriginalLocation end end)
+                                        PartData.Pending=nil
                                     end)
                                 else
                                     if not PartData.Regenerates then
@@ -17054,7 +17373,7 @@ if not IsMainMenu then
                         "IceWall", "IgnisShield", "ZeroShield", "ShieldEgg", "EggShield"
                     }
                     if table.find(ShieldDungeons, ISV.MissionId) or SV.PartyRaidID == 14 then
-                        while SV.Autofarm do
+                        while SV.Autofarm and generation==SV.AutofarmGeneration and not ScriptUnloaded and not KillSwitch do
                             for Index, Shield in ShieldNames do
                                 local CheckShield = Workspace:FindFirstChild(Shield)
                                 if CheckShield then
@@ -17070,7 +17389,7 @@ if not IsMainMenu then
                                         local ShieldPosition = Vector3.new(Ring.Position.X, Ring.Position.Y + PlayerSize, Ring.Position.Z)
                                         TempStop = true
                                         CanTarget = false
-                                        while CheckShield.Parent do
+                                        while CheckShield.Parent and SV.Autofarm and generation==SV.AutofarmGeneration and not ScriptUnloaded and not KillSwitch do
                                             PlayerRoot.CFrame = CFrame.new(ShieldPosition)
                                             task.wait()
                                         end
@@ -17090,7 +17409,7 @@ if not IsMainMenu then
             end)
         else
             SV.Autofarm = nil
-            PlayerRoot.CanCollide = true
+            if PlayerRoot and PlayerRoot.Parent then PlayerRoot.CanCollide = true end
             for Part, PartData in TeleportParts do
                 if Part and Part.Parent then
                     Part.Size = PartData.OriginalSize
@@ -17098,7 +17417,7 @@ if not IsMainMenu then
                     Part.Position = PartData.OriginalLocation
                 end
             end
-            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerRoot == SV.PlayerCamera.Parent then
+            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerCharacter and SV.PlayerCamera:IsDescendantOf(PlayerCharacter) then
                 workspace.CurrentCamera.CameraSubject = SV.PlayerCamera
             else
                 workspace.CurrentCamera.CameraSubject = (PlayerCharacter and PlayerCharacter:FindFirstChildOfClass("Humanoid")) or PlayerRoot
@@ -17140,129 +17459,137 @@ if not IsMainMenu then
         end
     end)
 end
+do
+(function()
+return function(NativePetCombat)
 if not IsMainMenu then
-    local PetKillaura
-    local PetKillauraChanged
-    Toggles.PetKillauraToggle:OnChanged(function(ChangedValue)
-        if ChangedValue and SV.SafeMode and not IsDungeon then
+    local controller
+    local initialize
+    local initializing=false
+    Toggles.PetKillauraToggle:OnChanged(function(enabled)
+        if controller then controller.Set(enabled)
+        elseif enabled and initialize then initialize()end
+    end)
+    Library:OnUnload(function()if controller then controller.Stop()end end)
+    initialize=function()
+    if initializing or controller or ScriptUnloaded or KillSwitch then return end
+    initializing=true
+    task.spawn(function()
+    local installed=pcall(function()
+    local petOk,petApi,petTypes,petProfile=GameCall(function()
+        return require(Shared.PetSkills),require(Shared.Pets),require(Shared.Profile)
+    end)
+    if petOk and petApi and petTypes and petProfile then
+        local used
+        local deadline=time()+90
+        repeat
+            if ScriptUnloaded or KillSwitch then return end
+            local ok,value=GameCall(function()return petApi:GetPetSkillUsedSignal()end)
+            if ok and value and type(value.Connect)=="function"then used=value break end
+            task.wait(.25)
+        until time()>=deadline
+        if not used then
+            if not Library.Unloaded then Library:Notify("Native pet skills did not finish initializing; toggle again after the game loads",4)end
             return
         end
- -- use pet skill
-        local TimeActivated = os.clock()
-        PetKillauraChanged = CheckForCharacter(TimeActivated)
-        if TimeActivated ~= PetKillauraChanged then
-            return
-        end
-
-        if ChangedValue then
-            PetKillaura = true
-            if SV.CanRequire then
-                local Success, Result = pcall(function()
-                    local UseSkill = Remotes:WaitForChild("PetSkills_UseSkill", math.huge)
-                    local PetSkill = GetPlayerPet(function() return not PetKillaura end)
-                    if not PetSkill then
-                        PetKillaura = false
-                        Toggles.PetKillauraToggle:SetValue(false)
-                        Library:Notify("Equip a pet with a supported attack skill first", 5)
-                        return
-                    end
-
-                    ConnectionTable["ConnectCharacter"] = PlayerCharacter.ChildAdded:Connect(function(NewChild)
-                        if NewChild.Name == "PetData" then
-                            PetSkill = GetPlayerPet()
-                        end
-                    end)
-
-                    local CAttack = Remotes:WaitForChild("Combat_Attack", math.huge)
-                    local AttackArgs = {
-                        Ranged = function(Skill, AttackPosition)
-                            CAttack:FireServer(Skill, AttackPosition, nil, AntiCheatNumber)
-                        end,
-                        Self = function()
-                            UseSkill:FireServer(PlayerCharacter, PlayerRoot.Position)
-                        end,
-                        MobPosition = function(Skill, AttackPosition)
-                            UseSkill:FireServer(PlayerCharacter, AttackPosition)
-                        end
-                    }
-                    while PetKillaura and not KillSwitch do
-                        for _, Attack in PetSkill.Skills do
-                            if CurrentMob then
-                                local AttackCooldown = Attack.Cooldown
-                                if tick() - (Attack.LastUsed or 0) >= AttackCooldown+AddedDelay then
-                                    local AttackType = Attack.Type
-                                    local MobCollider = CurrentMob:FindFirstChild("Collider")
-                                    if MobCollider then
-                                        local AttackDistance = Attack.Distance
-                                        local PlayerSurface = PlayerRoot:GetClosestPointOnSurface(MobCollider.Position)
-                                        local MobSurface = MobCollider:GetClosestPointOnSurface(PlayerRoot.Position)
-                                        local Distance = (PlayerSurface - MobSurface).Magnitude
-                                        if Distance <= AttackDistance then
-                                            local TpTime = CurrentMob:GetAttribute("T")
-                                            if SV.Autofarm and IsBoss and not (TpTime and TpTime+0.2 < time()) then
-                                                break
-                                            end
-                                            local FindAttackType = AttackArgs[AttackType]
-                                            if FindAttackType then
-                                                FindAttackType(Attack.Skill, MobSurface)
-                                            else
-                                                SV.PetKillaura = nil
-                                                
-                                                break
-                                            end
-                                            Attack.LastUsed = tick()
-                                            if DelayPetAttacks then
-                                                task.wait(DelayPetAttacks)
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                        task.wait(.1)
-                    end
-                end)
-                if not Success then
-                    local PetData = PlayerCharacter and PlayerCharacter:FindFirstChild("PetData")
-                    if PetData and PetSkills and SV.CanRequire then
-                        task.wait(.5)
-                        local rPets = require(Pets)
-                        local ItemName = PetData:GetAttribute("ItemName")
-                        local PetName = ReplicatedStorage.PlayerEquips[PlayerName].Pet[ItemName]
-                        local PetRef = rPets:GetPetSkillFromPetRef(PetName)
-                        local SkillExists = PetSkills[tostring(PetRef)]
-                        if SkillExists then
-                            SkillExists = "pet skill is supported."
-                        else
-                            SkillExists = "skill data for " ..tostring(PetRef).. " was not found, skill not supported"
-                        end
-                        
-                        return
-                    end
-                    
+        controller=NativePetCombat.Create({
+            Used=used,Now=time,Spawn=task.spawn,Wait=task.wait,
+            Delay=function()return math.max(0,tonumber(AddedDelay)or 0)+math.max(0,tonumber(DelayPetAttacks)or 0)end,
+            Stopped=function()return ScriptUnloaded or KillSwitch end,
+            Resolve=function()
+                if (SV.SafeMode and not IsDungeon)or SV.DodgingAttack or SV.QuotaPaused or SV.TransitionPending then return end
+                local character=LocalPlayer.Character
+                local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+                local root=character and character.PrimaryPart
+                if not root or not root.Parent or not humanoid or humanoid.Health<=0 then return end
+                local target=CurrentMob
+                if not CombatChecks.TargetReady(target,ISV.MobTable[target])then return end
+                local collider=target:FindFirstChild("Collider")or target.PrimaryPart
+                if not collider or not collider:IsA("BasePart")then return end
+                if petTypes:IsPetAbilityLocked(LocalPlayer)then return end
+                local equips=petProfile:GetPlayerEquips(LocalPlayer)
+                local folder=equips and equips:FindFirstChild("Pet")
+                local refs=folder and folder:GetChildren()or {}
+                if #refs~=1 then return end
+                local skill=petTypes:GetPetSkillFromPetRef(refs[1])
+                local data=skill and petApi:GetSkillData(skill)
+                local localPet=petTypes:GetLocalPet(character)
+                if not data or not localPet or not localPet.pos or localPet.usingSkill
+                    or not localPet.model or not localPet.model.PrimaryPart then return end
+                -- Retain the previous aura's 95-stud surface range, including
+                -- the existing ranged-farm height. The native adapter moves the pet.
+                local origin=root:GetClosestPointOnSurface(collider.Position)
+                local point=collider:GetClosestPointOnSurface(root.Position)
+                if (origin-point).Magnitude>95 then return end
+                if SV.Autofarm and IsBoss then
+                    local stamp=target:GetAttribute("T")
+                    if not(stamp and stamp+.2<time())then return end
                 end
-            else
-                local Success, Result = pcall(function()
-                    local UseSkill = Remotes:WaitForChild("PetSkills_UseSkill", math.huge)
-                    while PetKillaura and not KillSwitch do
-                        if CurrentMob then
-                            local MobCollider = CurrentMob:FindFirstChild("Collider", true)
-                            if MobCollider then
-                                UseSkill:FireServer(CurrentMob, MobCollider.Position)
-                            end
-                        end
-                        task.wait(1)
-                    end
-                end)
-                if not Success then
-                    
+                return character,data.NeedsTarget and target or character
+            end,
+            Use=function(character,target)
+                if LocalPlayer.Character==character and character.Parent then
+                    GameCall(function()petApi:UseSkill(LocalPlayer,target)end)
                 end
-            end
-        else
-            DisconnectVariable("ConnectCharacter")
-            PetKillaura = nil
+            end,
+        })
+        if not ScriptUnloaded and not KillSwitch and Toggles.PetKillauraToggle.Value then controller.Set(true)end
+    else
+        if not Library.Unloaded then Library:Notify("Native pet skills are unavailable in this client",4)end
+    end
+    end)
+    initializing=false
+    if not installed and not Library.Unloaded then Library:Notify("Native pet setup unavailable; toggle again after the game loads",4)end
+    end)
+    end
+    initialize()
+end
+end
+
+end)()((function()
+-- Native pet skill adapter. No reconstructed damage calls or cooldown changes.
+local PetCombat={}
+function PetCombat.Create(deps)
+    local generation=0
+    local pending=false
+    local nextAttempt=0
+    local stopped=false
+    local used=deps.Used:Connect(function(cooldown)
+        if type(cooldown)=="number" and cooldown==cooldown and cooldown>=0 and cooldown<math.huge then
+            nextAttempt=math.max(nextAttempt,deps.Now()+cooldown+math.max(0,deps.Delay()))
         end
     end)
+    local controller={}
+    function controller.Set(enabled)
+        generation+=1
+        if not enabled or stopped then return end
+        local current=generation
+        deps.Spawn(function()
+            while not stopped and current==generation and not deps.Stopped()do
+                if not pending and deps.Now()>=nextAttempt then
+                    local ok,character,target=pcall(deps.Resolve)
+                    if ok and character and target and current==generation and not stopped and not deps.Stopped()then
+                        pending=true
+                        nextAttempt=deps.Now()+.5 -- Bounded retry if the native adapter declines.
+                        pcall(deps.Use,character,target)
+                        pending=false
+                    end
+                end
+                deps.Wait(.1)
+            end
+        end)
+    end
+    function controller.Stop()
+        stopped=true generation+=1
+        used:Disconnect()
+    end
+    return controller
+end
+return PetCombat
+
+end)())
+end
+if not IsMainMenu then
     local CheckForRejoin
     local RestartChanged
     Toggles.RestartStuckToggle:OnChanged(function(ChangedValue) -- stuck restart
@@ -17406,6 +17733,7 @@ if not IsMainMenu then
                 else
                     ClaimingBattlepass = true
                 end
+                local claimOk=pcall(function()
                 local rBattlepass = require(Battlepass)
                 local RedeemedItem = Remotes:WaitForChild("Battlepass_RedeemedItem", math.huge)
                 local RedeemItem = Remotes:WaitForChild("Battlepass_RedeemItem", math.huge)
@@ -17446,7 +17774,7 @@ if not IsMainMenu then
                         local Rank = Tracks[Track]
                         local NextTier = rBattlepass:FindNextItemTier(Tracks[Track])
                         if Track == 1 and not FreeClaimed then
-                            if Rank == 0 or Rank ~= LastFree then
+                            if Rank ~= LastFree then
                                 ClaimRank(NextTier)
                                 LastFree = Rank
                             else
@@ -17454,7 +17782,7 @@ if not IsMainMenu then
                             end
                         end
                         if Track == 2 and not PaidClaimed then
-                            if Rank == 0 or Rank ~= LastPaid then
+                            if Rank ~= LastPaid then
                                 ClaimRank(NextTier, true)
                                 LastPaid = Rank
                             else
@@ -17465,7 +17793,9 @@ if not IsMainMenu then
                     end
                     task.wait()
                 until (FreeClaimed and PaidClaimed)or ScriptUnloaded or KillSwitch or not Toggles.AutoClaimBattlepass.Value
+                end)
                 ClaimingBattlepass = false
+                if not claimOk then Library:Notify("Battlepass claim unavailable; toggle again to retry",4)end
             else
                 Library:Notify("Your executor doesn't support this option")
             end
@@ -17981,6 +18311,51 @@ task.wait()
 
 if not SV.MiscellaneousTab then -- for unloaded miscellaneous tab
 SetGlobal("misc tab functions")
+local EffectFilters=(function()
+-- Death-only and all-effects filters share DoEffect; reconcile their ownership.
+local Filters={}
+function Filters.Create(effects,hooks)
+    local allBefore,deathBefore
+    local controller={}
+    local function clear(fn)
+        if hooks.CheckHook(fn)then hooks.ClearHook(fn)end
+    end
+    function controller.Set(all,death)
+        all=all==true death=death==true
+        if all~=allBefore then
+            for _,name in ipairs({"MakeProjectile","PlayAt","EmitAt"})do
+                local fn=effects[name]
+                clear(fn)
+                if all then hooks.Hook(fn,hooks.NewClosure(function()end))end
+            end
+        end
+        if all~=allBefore or death~=deathBefore then
+            local fn=effects.DoEffect
+            clear(fn)
+            if all then hooks.Hook(fn,hooks.NewClosure(function()end))
+            elseif death then
+                local original
+                original=hooks.Hook(fn,hooks.NewClosure(function(self,name,...)
+                    if name~="DeathEffect"then return original(self,name,...)end
+                end))
+            end
+        end
+        allBefore,deathBefore=all,death
+    end
+    return controller
+end
+return Filters
+
+end)()
+local combinedEffectFilters
+local function RefreshEffectFilters()
+    if not combinedEffectFilters then
+        combinedEffectFilters=EffectFilters.Create(require(Effects),EF)
+        Library:OnUnload(function()combinedEffectFilters.Set(false,false)end)
+    end
+    combinedEffectFilters.Set(Toggles.PreventEffectsToggle.Value,Toggles.DeathEffectToggle.Value)
+end
+
 if IsDungeon then
     SV.PlayerCamera = Camera.CameraSubject
     local CameraChanged
@@ -17992,6 +18367,7 @@ if IsDungeon then
         end
 
         if ChangedValue then
+            if not IsMobCamera then SV.PlayerCamera=workspace.CurrentCamera.CameraSubject end
             task.spawn(function()
                 Toggles.NoclipCameraToggle:SetValue(true)
             end)
@@ -17999,7 +18375,7 @@ if IsDungeon then
         else
             IsMobCamera = false
             task.wait(.1)
-            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerRoot == SV.PlayerCamera.Parent then
+            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerCharacter and SV.PlayerCamera:IsDescendantOf(PlayerCharacter) then
                 workspace.CurrentCamera.CameraSubject = SV.PlayerCamera
             else
                 workspace.CurrentCamera.CameraSubject = (PlayerCharacter and PlayerCharacter:FindFirstChildOfClass("Humanoid")) or PlayerRoot
@@ -18049,19 +18425,7 @@ if not IsMainMenu then
     Toggles.DeathEffectToggle:OnChanged(function(ChangedValue) -- hide damage flash
         if SV.CanRequire and EF.Hook and EF.ClearHook and EF.NewClosure and EF.CheckHook then
             local Success, Result = pcall(function()
-                local DoEffect = require(Effects).DoEffect
-                if ChangedValue then
-                    local OldFunction
-                    OldFunction = EF.Hook(DoEffect, EF.NewClosure(function(a, Effect, ...)
-                        if Effect == "DeathEffect" then
-                            return
-                        else
-                            return OldFunction(a, Effect, ...)
-                        end
-                    end))
-                else
-                    CreateHookOnFunction(DoEffect, false)
-                end
+                RefreshEffectFilters()
             end)
             if not Success then
                 
@@ -18139,7 +18503,7 @@ if IsDungeon then
         if ChangedValue then
             SV.ShowTime = true
             if IsMissionOver() then
-                Library:Notify("Completed in " ..SV.DungeonCompletionTime)
+                Library:Notify(SV.DungeonCompletionTime and ("Completed in "..SV.DungeonCompletionTime)or "Completion time is unavailable for a run finished before this script loaded",4)
             end
         else
             SV.ShowTime = nil
@@ -18161,22 +18525,66 @@ Toggles.AFKToggle:OnChanged(function(enabled)
     end
 end)
 if IsMainMenu then
-    Toggles.MainMenuPlay:OnChanged(function(ChangedValue)
-        if ChangedValue then
-            if firesignal then
-                local PlayButton = PlayerGui:WaitForChild("MainMenuGui", math.huge):WaitForChild("Main", math.huge):WaitForChild("Play", math.huge):WaitForChild("Play", math.huge)
-                if not ChangedValue then
+(function()
+-- Reuse the game's existing Play button and selected character; never choose a slot.
+return function(toggle,context)
+    local generation=0
+    toggle:OnChanged(function(enabled)
+        generation+=1
+        if not enabled then return end
+        local token=generation
+        context.Spawn(function()
+            local deadline=context.Now()+15
+            local attempted=false
+            while token==generation and toggle.Value and not context.Stopped()do
+                local button=context.Button()
+                if button then
+                    if not context.Activate(button)then
+                        context.Notify("This executor could not activate the game's Play button")
+                        return
+                    end
+                    attempted=true
+                elseif attempted then return
+                elseif context.Now()>=deadline then
+                    context.Notify("Play is not ready; select your existing character and toggle Auto click play again")
                     return
                 end
-                while Toggles.MainMenuPlay.Value and not (KillSwitch or ScriptUnloaded) do
-                    firesignal(PlayButton.MouseButton1Click)
-                    task.wait(.5)
-                end
-            else
-                Library:Notify("Your executor doesn't support this option")
+                context.Wait(1)
             end
-        end
+        end)
     end)
+    context.OnUnload(function()generation+=1 end)
+end
+
+end)()(Toggles.MainMenuPlay,{
+    Spawn=task.spawn,Wait=task.wait,Now=time,
+    Stopped=function()return ScriptUnloaded or KillSwitch end,
+    OnUnload=function(fn)Library:OnUnload(fn)end,
+    Notify=function(message)Library:Notify(message,5)end,
+    Button=function()
+        local gui=PlayerGui:FindFirstChild("MainMenuGui")
+        local main=gui and gui:FindFirstChild("Main")
+        local frame=main and main:FindFirstChild("Play")
+        local button=frame and frame:FindFirstChild("Play")
+        return frame and frame.Visible and button and button:IsA("GuiButton")and button.Visible and button.Active and button or nil
+    end,
+    Activate=function(button)
+        local activated=false
+        if type(getconnections)=="function"then
+            local ok,connections=pcall(getconnections,button.MouseButton1Click)
+            if ok then for _,connection in ipairs(connections)do
+                if connection.Enabled~=false and type(connection.Function)=="function"then
+                    local called=GameCall(connection.Function)
+                    activated=called or activated
+                end
+            end end
+        end
+        if not activated and type(firesignal)=="function"then
+            activated=GameCall(function()firesignal(button.MouseButton1Click)end)
+        end
+        return activated
+    end,
+})
 end
 if IsWorld then
     Toggles.AutoJoinDungeon:OnChanged(function(ChangedValue)
@@ -18212,34 +18620,23 @@ if not IsMainMenu then
             end
         end
     end)
-    Toggles.MobESPToggle:OnChanged(function(ChangedValue) -- mob esp
-        if ChangedValue then
-            for _, Mob in Mobs:GetChildren() do
-                if Mob then
-                    local Highlight = Instance.new("Highlight")
-                    Highlight.Name="LarpZeroMobHighlight"
-                    Highlight.FillTransparency = 0
-                    Highlight.Parent = Mob
-                end
-            end
-            ConnectionTable["ConnectMobFolder"] = Mobs.ChildAdded:Connect(function(NewMob)
-                if NewMob then
-                    local Highlight = Instance.new("Highlight")
-                    Highlight.Name="LarpZeroMobHighlight"
-                    Highlight.FillTransparency = 0
-                    Highlight.Parent = NewMob
-                end
-            end)
-        else
-            DisconnectVariable("ConnectMobFolder")
-            for _, MobFolder in Mobs:GetChildren() do
-                local MobHighlight = MobFolder and MobFolder:FindFirstChild("LarpZeroMobHighlight", true)
-                if MobHighlight then
-                    MobHighlight:Destroy()
-                    MobHighlight = nil
-                end
-            end
+    local function HighlightMob(mob)
+        if not mob or not mob.Parent or mob:FindFirstChild("LarpZeroMobHighlight")then return end
+        local highlight=Instance.new("Highlight")
+        highlight.Name="LarpZeroMobHighlight"
+        highlight.FillTransparency=0
+        highlight.Parent=mob
+    end
+    Toggles.MobESPToggle:OnChanged(function(enabled)
+        DisconnectVariable("ConnectMobFolder")
+        for _,child in ipairs(Mobs:GetDescendants())do
+            if child.Name=="LarpZeroMobHighlight"and child:IsA("Highlight")then child:Destroy()end
         end
+        if not enabled then return end
+        for _,mob in ipairs(Mobs:GetChildren())do HighlightMob(mob)end
+        ConnectionTable.ConnectMobFolder=Mobs.ChildAdded:Connect(function(mob)
+            if not ScriptUnloaded and Toggles.MobESPToggle.Value then HighlightMob(mob)end
+        end)
     end)
     local originalCameraMode
     Toggles.NoclipCameraToggle:OnChanged(function(ChangedValue) -- noclip camera
@@ -18363,18 +18760,7 @@ if not IsMainMenu then
     Toggles.PreventEffectsToggle:OnChanged(function(ChangedValue)
         if SV.CanRequire and EF.Hook and EF.ClearHook and EF.NewClosure and EF.CheckHook then
             local Success, Result = pcall(function()
-                local rEffects = require(Effects)
-                if ChangedValue then
-                    CreateHookOnFunction(rEffects.MakeProjectile, true)
-                    CreateHookOnFunction(rEffects.DoEffect, true)
-                    CreateHookOnFunction(rEffects.PlayAt, true)
-                    CreateHookOnFunction(rEffects.EmitAt, true)
-                else
-                    CreateHookOnFunction(rEffects.MakeProjectile, false)
-                    CreateHookOnFunction(rEffects.DoEffect, false)
-                    CreateHookOnFunction(rEffects.PlayAt, false)
-                    CreateHookOnFunction(rEffects.EmitAt, false)
-                end
+                RefreshEffectFilters()
             end)
             if not Success then
                 
@@ -18472,6 +18858,7 @@ if tradeOk and tradeApi then
     end
 end
 
+Library.GameHandlersReady=true
 SetGlobal("getting mission id")
 if IsDungeon then
     MissionObjects = Workspace:WaitForChild("MissionObjects", math.huge)
@@ -19287,7 +19674,7 @@ function CleanUpScript()
     if DC then
         
         if IsDungeon then
-            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerRoot == SV.PlayerCamera.Parent then
+            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerCharacter and SV.PlayerCamera:IsDescendantOf(PlayerCharacter) then
                 Workspace.CurrentCamera.CameraSubject = SV.PlayerCamera
             else
                 Workspace.CurrentCamera.CameraSubject = (PlayerCharacter and PlayerCharacter:FindFirstChildOfClass("Humanoid")) or PlayerRoot
@@ -19442,6 +19829,8 @@ end
 SetGlobal("end")
 ]====]
 if not game:IsLoaded() then game.Loaded:Wait() end
+local LarpZeroInstance,LarpZeroStartupLock
+do
 local LarpZeroLockRoot=game:GetService("CoreGui")
 local sharedLock=LarpZeroLockRoot:FindFirstChild("LarpZeroStartupLock")
 if sharedLock then
@@ -19466,13 +19855,14 @@ local oldGui=prior and prior.Library and prior.Library.ScreenGui
 local liveMenu=oldGui and oldGui.Parent~=nil and not prior.Library.Unloaded
 local recentStart=prior and prior.Loading and os.clock()-(prior.Started or 0)<90
 if sameServer and (recentStart or liveMenu) then return end
-local LarpZeroStartupLock=Instance.new("Folder")
+LarpZeroStartupLock=Instance.new("Folder")
 LarpZeroStartupLock.Name="LarpZeroStartupLock"
 LarpZeroStartupLock:SetAttribute("Started",os.clock())
 LarpZeroStartupLock:SetAttribute("Loading",true)
 LarpZeroStartupLock.Parent=LarpZeroLockRoot
-local LarpZeroInstance={Loading=true,Place=game.PlaceId,Server=game.JobId,Started=os.clock()}
+LarpZeroInstance={Loading=true,Place=game.PlaceId,Server=game.JobId,Started=os.clock()}
 getgenv().LarpZeroInstance=LarpZeroInstance
+end
 local InstallLocalProfiles=(function()
 -- Local settings only. No reporting or runtime downloads.
 return function(library,tab)
@@ -19481,6 +19871,10 @@ return function(library,tab)
     local group=tab:AddRightGroupbox("Local configurations")
     local excluded={ProfileName=true}
     local loading=false
+    local generation=0
+    library.ProfileLoading=false
+    library.ProfileLoaded=false
+    library.ProfileGeneration=0
     local function ready()
         return type(readfile)=="function" and type(writefile)=="function"
             and type(isfile)=="function" and type(isfolder)=="function" and type(makefolder)=="function"
@@ -19493,6 +19887,22 @@ return function(library,tab)
         return value
     end
     local function path(value)return folder.."/"..value..".json"end
+    local function validName(value)
+        return type(value)=="string" and value:match("^[%w_%-]+$") and #value<=48 and value~="teleport_resume"
+    end
+    local function decode(text)
+        local data=codec:JSONDecode(text)
+        if type(data)~="table" or data.Version~=1 or type(data.Options)~="table" or type(data.Toggles)~="table" then error("Invalid profile")end
+        return data
+    end
+    local function readProfile(value)
+        if not ready() or not validName(value) then error("Invalid profile")end
+        local ok,data=pcall(function()return decode(readfile(path(value)))end)
+        if ok then return data end
+        -- Recovery never rewrites a file. A backup is created only by Save Settings.
+        if isfile(path(value)..".bak")then return decode(readfile(path(value)..".bak"))end
+        error("Saved profile unavailable")
+    end
     local function prepare()
         if not ready() then error("Local storage unavailable")end
         if not isfolder(folder) then makefolder(folder)end
@@ -19522,17 +19932,22 @@ return function(library,tab)
         return data
     end
     local function load(value,startup)
-        prepare()
-        local data=codec:JSONDecode(readfile(path(value)))
-        if type(data)~="table" or data.Version~=1 or type(data.Options)~="table" or type(data.Toggles)~="table" then
-            error("Invalid profile")
-        end
+        local data=readProfile(value)
+        generation+=1
+        local current=generation
         loading=true
+        library.ProfileLoading=true
+        library.ProfileGeneration=current
         task.spawn(function()
+            if library.Unloaded or current~=generation then
+                if current==generation then loading=false library.ProfileLoading=false end
+                return
+            end
+            local partial=false
             local ok=pcall(function()
                 -- Stop active features before changing their supporting inputs.
-                for _,toggle in pairs(library.Toggles)do
-                    if toggle.Value and toggle~=library.Toggles.SafeModeToggle then
+                for key,toggle in pairs(library.Toggles)do
+                    if type(data.Toggles[key])=="boolean" and toggle.Value and toggle~=library.Toggles.SafeModeToggle then
                         local disabled=toggle.Disabled
                         toggle:SetDisabled(false)
                         toggle:SetValue(false)
@@ -19543,7 +19958,9 @@ return function(library,tab)
                     local option=library.Options[key]
                     if not excluded[key] and option and type(row)=="table" and option.Type==row.Type
                         and option.SpecialType~="Player" and option.SpecialType~="Team" then
+                        local applied=pcall(function()
                         if row.Type=="ColorPicker" then
+                            if type(row.Value)~="string" or not row.Value:match("^%x%x%x%x%x%x$")then error("Invalid color")end
                             option:SetValueRGB(Color3.fromHex(row.Value),row.Transparency)
                         elseif row.Type=="KeyPicker" then
                             option:SetValue({row.Value,row.Mode})
@@ -19563,17 +19980,28 @@ return function(library,tab)
                                 end
                             end
                             option:SetValue(values)
-                        else option:SetValue(row.Value)end
+                        elseif row.Type=="Slider" then
+                            if type(row.Value)~="number" or row.Value~=row.Value or math.abs(row.Value)==math.huge then error("Invalid slider")end
+                            option:SetValue(row.Value)
+                        elseif row.Type=="Input" then
+                            if type(row.Value)~="string" then error("Invalid input")end
+                            option:SetValue(row.Value)
+                        elseif row.Type=="Dropdown" then
+                            if type(row.Value)~="string" and type(row.Value)~="table" and type(row.Value)~="number" and row.Value~=nil then error("Invalid selection")end
+                            option:SetValue(row.Value)
+                        end
+                        end)
+                        if not applied then partial=true end
                     end
                 end
-                local safe=data.Toggles.SafeModeToggle~=false
-                if library.Toggles.SafeModeToggle then library.Toggles.SafeModeToggle:SetValue(safe)end
+                local safe=data.Toggles.SafeModeToggle
+                if library.Toggles.SafeModeToggle and type(safe)=="boolean"then library.Toggles.SafeModeToggle:SetValue(safe)end
                 for key,enabled in pairs(data.Toggles)do
                     local toggle=library.Toggles[key]
                     if key~="SafeModeToggle" and toggle and enabled==true then
                         -- Farming callbacks can yield for as long as a feature runs.
                         task.spawn(function()
-                            if not library.Unloaded then pcall(function()
+                            if not library.Unloaded and current==generation then pcall(function()
                                 local disabled=toggle.Disabled
                                 toggle:SetDisabled(false)
                                 toggle:SetValue(true)
@@ -19585,52 +20013,70 @@ return function(library,tab)
                 if startup and data.Toggles.HideGuiToggle==true and library.Toggled then library:Toggle()end
             end)
             loading=false
-            if not library.Unloaded then library:Notify(ok and "Configuration loaded" or "Configuration could not be fully applied",4)end
+            library.ProfileLoading=false
+            library.ProfileLoaded=true
+            if not library.Unloaded then library:Notify(ok and not partial and "Configuration loaded" or "Configuration could not be fully applied",4)end
         end)
     end
+    -- Kept for older replay call sites: a hop must never persist temporary settings.
     library.PrepareTeleportSettings=function()
-        prepare()
-        writefile(path("teleport_resume"),codec:JSONEncode(capture()))
+        return true
     end
     group:AddInput("ProfileName",{Text="Configuration name",Default="default",Placeholder="Letters, numbers, dash or underscore"})
-    group:AddButton({Text="Save configuration",Func=function()action(function()
-        prepare() writefile(path(name()),codec:JSONEncode(capture())) library:Notify("Configuration saved",3)
+    local autoload=group:AddLabel("Autoload: none")
+    group:AddButton({Text="Save Settings",Func=function()action(function()
+        local value=name()
+        if not validName(value)then error("Invalid profile")end
+        local text=codec:JSONEncode(capture())
+        decode(text)
+        prepare()
+        if isfile(path(value))then
+            local old=readfile(path(value))
+            if pcall(decode,old)then writefile(path(value)..".bak",old)end
+        end
+        writefile(path(value),text)
+        decode(readfile(path(value)))
+        library:Notify("Settings saved",3)
     end)end})
     group:AddButton({Text="Load configuration",Func=function()action(function()load(name())end)end})
     group:AddButton({Text="Delete configuration",DoubleClick=true,Func=function()action(function()
-        prepare()
+        if not ready()then error("Local storage unavailable")end
         if type(delfile)~="function" then error("Delete unavailable")end
         local value=name()
         if isfile(path(value)) then delfile(path(value))end
-        if isfile(folder.."/autoload.txt") and readfile(folder.."/autoload.txt")==value then delfile(folder.."/autoload.txt")end
+        if isfile(path(value)..".bak")then delfile(path(value)..".bak")end
+        if isfile(folder.."/autoload.txt") and readfile(folder.."/autoload.txt")==value then
+            delfile(folder.."/autoload.txt")autoload:SetText("Autoload: none")
+        end
         library:Notify("Configuration deleted",3)
     end)end})
-    local autoload=group:AddLabel("Autoload: none")
     group:AddButton({Text="Autoload this configuration",Func=function()action(function()
-        prepare() local value=name()
+        if not ready()then error("Local storage unavailable")end
+        local value=name()
         if not isfile(path(value)) then error("Save configuration first")end
+        readProfile(value)
         writefile(folder.."/autoload.txt",value)
+        if readfile(folder.."/autoload.txt")~=value then error("Autoload selection was not saved")end
         autoload:SetText("Autoload: "..value)
+        library:Notify("Autoload selection saved",3)
     end)end})
     group:AddButton({Text="Clear autoload",Func=function()action(function()
-        prepare()
-        if type(delfile)~="function" then error("Delete unavailable")end
-        if isfile(folder.."/autoload.txt") then delfile(folder.."/autoload.txt")end
+        if not ready()then error("Local storage unavailable")end
+        if isfile(folder.."/autoload.txt")then
+            if type(delfile)~="function"then error("Delete unavailable")end
+            delfile(folder.."/autoload.txt")
+            if isfile(folder.."/autoload.txt")then error("Autoload selection was not cleared")end
+        end
         autoload:SetText("Autoload: none")
+        library:Notify("Autoload cleared",3)
     end)end})
     return function()
     if ready() then
         local chosen=false
         local ok=pcall(function()
-            if getgenv().LarpZeroResumeSettings and isfile(path("teleport_resume")) then
-                local value=isfile(folder.."/autoload.txt")and readfile(folder.."/autoload.txt")or "default"
-                if value:match("^[%w_%-]+$")and #value<=48 then library.Options.ProfileName:SetValue(value)end
-                load("teleport_resume",true)
-                chosen=true
-            end
             if not chosen and isfile(folder.."/autoload.txt") then
                 local value=readfile(folder.."/autoload.txt")
-                if value:match("^[%w_%-]+$") and #value<=48 and isfile(path(value)) then
+                if validName(value) and (isfile(path(value))or isfile(path(value)..".bak")) then
                     library.Options.ProfileName:SetValue(value)
                     autoload:SetText("Autoload: "..value)
                     load(value,true)
@@ -19638,12 +20084,10 @@ return function(library,tab)
                 end
             end
         end)
-        if not chosen and getgenv().LarpZeroResumeSettings then
-            pcall(function()load("teleport_resume",true)end)
-        end
         getgenv().LarpZeroResumeSettings=nil
+        if not chosen then library.ProfileLoaded=true end
         if not ok then library:Notify("Saved configuration could not be opened",4)end
-    else group:AddLabel("Local file storage is unavailable in this executor.",true)end
+    else library.ProfileLoaded=true group:AddLabel("Local file storage is unavailable in this executor.",true)end
     end
 end
 
@@ -32141,7 +32585,7 @@ local function MobScanner()
                         break
                     end
                     UpdateInvincibility = ISV.MobTable[Mob]
-                    task.wait()
+                    task.wait(.1)
                 until UpdateInvincibility
                 if UpdateInvincibility then
                     if Value then
@@ -32156,12 +32600,12 @@ local function MobScanner()
                 local BigNumber = math.huge
                 local function ValidMob(Mob, MobName)
                     local IsDebug = ISV.Debug
-                    IsAliveMobs += 1
+                    
                     if Mob.Parent and Mob.Parent == Workspace.Characters then
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                     if not MobName then
@@ -32171,7 +32615,7 @@ local function MobScanner()
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                     if Blockers[MobName] then
@@ -32180,7 +32624,7 @@ local function MobScanner()
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         BlockerHitbox.Name = "Collider"
@@ -32201,14 +32645,14 @@ local function MobScanner()
                                 break
                             end
                             MobData = rMob:GetMobData(Mob)
-                            task.wait()
+                            task.wait(.1)
                         until MobData
 
                         if MobData and (MobData.IsHunterPet or MobData.CanAttackMobs or MobData.CanAttackEntities) then
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
 
@@ -32259,30 +32703,98 @@ local function MobScanner()
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                 end
-local registering=setmetatable({},{__mode="k"})
-                local function RegisterMob(mob)
-                    if not mob or not mob.Parent or registering[mob]or ISV.MobTable[mob]then return end
-                    local properties=mob:FindFirstChild("HealthProperties")
-                    local health=properties and properties:FindFirstChild("Health")
-                    if health and health.Value<=0 then return end
-                    registering[mob]=true
-                    pcall(ValidMob,mob)
-                    registering[mob]=nil
-                end
-                ConnectionTable.ConnectMobFolder=Mobs.ChildAdded:Connect(function(mob)task.spawn(RegisterMob,mob)end)
-                                ConnectionTable["ConnectMobCreated"] = Remotes:WaitForChild("Health_InstanceAdded").OnClientEvent:Connect(function(Mob)
-                    repeat task.wait() until Mob.Parent ~= ReplicatedStorage
+local MobRegistry=(function()
+-- One registration worker per candidate; folder events handle normal spawn/despawn.
+local Registry={}
+function Registry.Create(deps)
+    local pending=setmetatable({},{__mode="k"})
+    local retry=setmetatable({},{__mode="k"})
+    local stopped=false
+    local folder,added,removed
+    local nextPoll=0
+    local registry={}
+    local function count()
+        local total=0
+        for _ in pairs(deps.Entries)do total+=1 end
+        deps.Count(total)
+    end
+    function registry.Remove(mob)
+        deps.Entries[mob]=nil
+        retry[mob]=nil
+        if deps.ClearTarget then deps.ClearTarget(mob)end
+        count()
+    end
+    local function eligible(mob)
+        if not mob or mob.Parent~=folder then return false end
+        local properties=mob:FindFirstChild("HealthProperties")
+        local health=properties and properties:FindFirstChild("Health")
+        return not health or health.Value>0
+    end
+    function registry.Register(mob)
+        if stopped or deps.Stopped()or not eligible(mob)or pending[mob]or deps.Entries[mob]
+            or (retry[mob]or 0)>deps.Now()then return end
+        pending[mob]=true
+        deps.Spawn(function()
+            if stopped or deps.Stopped()or not eligible(mob)then pending[mob]=nil return end
+            pcall(deps.Validate,mob)
+            pending[mob]=nil
+            if stopped or deps.Stopped()or not eligible(mob)then deps.Entries[mob]=nil
+            elseif not deps.Entries[mob]then retry[mob]=deps.Now()+5 end
+            count()
+        end)
+    end
+    function registry.Poll()
+        if stopped or deps.Stopped()or deps.Now()<nextPoll then return end
+        nextPoll=deps.Now()+1
+        local current=deps.Folder()
+        if current~=folder then
+            if added then added:Disconnect()end
+            if removed then removed:Disconnect()end
+            folder=current
+            if folder then
+                added=folder.ChildAdded:Connect(registry.Register)
+                removed=folder.ChildRemoved:Connect(registry.Remove)
+            end
+        end
+        for mob in pairs(deps.Entries)do if not eligible(mob)then registry.Remove(mob)end end
+        if folder then for _,mob in ipairs(folder:GetChildren())do registry.Register(mob)end end
+    end
+    function registry.Stop()
+        stopped=true
+        if added then added:Disconnect()end
+        if removed then removed:Disconnect()end
+        for mob in pairs(deps.Entries)do deps.Entries[mob]=nil end
+        count()
+    end
+    return registry
+end
+return Registry
+
+end)().Create({
+    Entries=ISV.MobTable,Now=time,Spawn=task.spawn,
+    Stopped=function()return KillSwitch or ScriptUnloaded end,
+    Folder=function()return Workspace:FindFirstChild("Mobs")end,
+    Validate=ValidMob,Count=function(value)IsAliveMobs=value end,
+    ClearTarget=function(mob)
+        if CurrentMob==mob then CurrentMob=nil end
+        if TeleportMob==mob then TeleportMob=nil end
+    end,
+})
+Library:OnUnload(MobRegistry.Stop)
+local RegisterMob=MobRegistry.Register
+                ConnectionTable["ConnectMobCreated"] = Remotes:WaitForChild("Health_InstanceAdded").OnClientEvent:Connect(function(Mob)
+                    -- Folder ChildAdded handles models whose health event arrives before parenting.
                     RegisterMob(Mob)
                 end)
                 ConnectionTable["ConnectMobDied"] = Remotes:WaitForChild("Mobs_MobDied", math.huge).OnClientEvent:Connect(function(Name, Mob)
                     local CheckTable = ISV.MobTable[Mob]
                     if CheckTable then
-                        ISV.MobTable[Mob] = nil
-                        IsAliveMobs -= 1
+                        MobRegistry.Remove(Mob)
+                        
                         if ISV.Debug then
                             
                         end
@@ -32291,16 +32803,12 @@ local registering=setmetatable({},{__mode="k"})
                 for Index, Mob in Mobs:GetChildren() do
                     task.spawn(RegisterMob,Mob)
                 end
-                local nextMobScan=0
-                while not KillSwitch do
-                    if time()>=nextMobScan then
-                        nextMobScan=time()+1
-                        local folder=Workspace:FindFirstChild("Mobs")
-                        if folder then for _,mob in ipairs(folder:GetChildren())do task.spawn(RegisterMob,mob)end end
-                    end
+                while not KillSwitch and not ScriptUnloaded do
+                    MobRegistry.Poll()
+                    if not PlayerRoot or not PlayerRoot.Parent then task.wait(.1)continue end
                     if not CanTarget or SV.QuotaPaused then
                         CurrentMob = nil
-                        task.wait()
+                        task.wait(.1)
                         continue
                     end
 
@@ -32319,18 +32827,18 @@ local registering=setmetatable({},{__mode="k"})
                             if ISV.Debug then
                                 
                             end
-                            TableReference[Mob] = nil
-                            IsAliveMobs -= 1
+                            MobRegistry.Remove(Mob)
+                            
                             continue
                         end
                         local HealthProperties = Mob:FindFirstChild("HealthProperties")
                         local Health = HealthProperties and HealthProperties:FindFirstChild("Health")
-                        if Health and Health.Value == 0 then
+                        if Health and Health.Value <= 0 then
                             if ISV.Debug then
                                 
                             end
-                            TableReference[Mob] = nil
-                            IsAliveMobs -= 1
+                            MobRegistry.Remove(Mob)
+                            
                             continue
                         end
                         if AddedTable.IsBlocker then
@@ -32393,7 +32901,7 @@ local registering=setmetatable({},{__mode="k"})
                     else
                         CurrentMob = nil
                     end
-                    task.wait()
+                    task.wait(.1)
                 end
             else
                 PriorityMobs["BOSSSeraphiel"] = nil
@@ -32404,12 +32912,12 @@ local registering=setmetatable({},{__mode="k"})
                 end
                 local function ValidMob(Mob, MobName)
                     local IsDebug = ISV.Debug
-                    IsAliveMobs += 1
+                    
                     if Mob.Parent and Mob.Parent == Workspace.Characters then
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                     if not MobName then
@@ -32419,7 +32927,7 @@ local registering=setmetatable({},{__mode="k"})
                         if IsDebug then
                             
                         end
-                        IsAliveMobs -= 1
+                        
                         return
                     end
                     if Blockers[MobName] then
@@ -32439,14 +32947,14 @@ local registering=setmetatable({},{__mode="k"})
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         if DontAttackBosses[MobName] then
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         local FromSpawnPart = Mob:WaitForChild("FromSpawnPart", 2)
@@ -32454,7 +32962,7 @@ local registering=setmetatable({},{__mode="k"})
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         local MobProperties = Mob:WaitForChild("MobProperties", 2)
@@ -32463,7 +32971,7 @@ local registering=setmetatable({},{__mode="k"})
                             if IsDebug then
                                 
                             end
-                            IsAliveMobs -= 1
+                            
                             return
                         end
                         local ShrinkMob = ShrinkCollider[MobName]
@@ -32489,26 +32997,94 @@ local registering=setmetatable({},{__mode="k"})
                         end
                     end
                 end
-local registering=setmetatable({},{__mode="k"})
-                local function RegisterMob(mob)
-                    if not mob or not mob.Parent or registering[mob]or ISV.MobTable[mob]then return end
-                    local properties=mob:FindFirstChild("HealthProperties")
-                    local health=properties and properties:FindFirstChild("Health")
-                    if health and health.Value<=0 then return end
-                    registering[mob]=true
-                    pcall(ValidMob,mob)
-                    registering[mob]=nil
-                end
-                ConnectionTable.ConnectMobFolder=Mobs.ChildAdded:Connect(function(mob)task.spawn(RegisterMob,mob)end)
-                                ConnectionTable["ConnectMobCreated"] = Remotes:WaitForChild("Health_InstanceAdded").OnClientEvent:Connect(function(Mob)
-                    repeat task.wait() until Mob.Parent ~= ReplicatedStorage
+local MobRegistry=(function()
+-- One registration worker per candidate; folder events handle normal spawn/despawn.
+local Registry={}
+function Registry.Create(deps)
+    local pending=setmetatable({},{__mode="k"})
+    local retry=setmetatable({},{__mode="k"})
+    local stopped=false
+    local folder,added,removed
+    local nextPoll=0
+    local registry={}
+    local function count()
+        local total=0
+        for _ in pairs(deps.Entries)do total+=1 end
+        deps.Count(total)
+    end
+    function registry.Remove(mob)
+        deps.Entries[mob]=nil
+        retry[mob]=nil
+        if deps.ClearTarget then deps.ClearTarget(mob)end
+        count()
+    end
+    local function eligible(mob)
+        if not mob or mob.Parent~=folder then return false end
+        local properties=mob:FindFirstChild("HealthProperties")
+        local health=properties and properties:FindFirstChild("Health")
+        return not health or health.Value>0
+    end
+    function registry.Register(mob)
+        if stopped or deps.Stopped()or not eligible(mob)or pending[mob]or deps.Entries[mob]
+            or (retry[mob]or 0)>deps.Now()then return end
+        pending[mob]=true
+        deps.Spawn(function()
+            if stopped or deps.Stopped()or not eligible(mob)then pending[mob]=nil return end
+            pcall(deps.Validate,mob)
+            pending[mob]=nil
+            if stopped or deps.Stopped()or not eligible(mob)then deps.Entries[mob]=nil
+            elseif not deps.Entries[mob]then retry[mob]=deps.Now()+5 end
+            count()
+        end)
+    end
+    function registry.Poll()
+        if stopped or deps.Stopped()or deps.Now()<nextPoll then return end
+        nextPoll=deps.Now()+1
+        local current=deps.Folder()
+        if current~=folder then
+            if added then added:Disconnect()end
+            if removed then removed:Disconnect()end
+            folder=current
+            if folder then
+                added=folder.ChildAdded:Connect(registry.Register)
+                removed=folder.ChildRemoved:Connect(registry.Remove)
+            end
+        end
+        for mob in pairs(deps.Entries)do if not eligible(mob)then registry.Remove(mob)end end
+        if folder then for _,mob in ipairs(folder:GetChildren())do registry.Register(mob)end end
+    end
+    function registry.Stop()
+        stopped=true
+        if added then added:Disconnect()end
+        if removed then removed:Disconnect()end
+        for mob in pairs(deps.Entries)do deps.Entries[mob]=nil end
+        count()
+    end
+    return registry
+end
+return Registry
+
+end)().Create({
+    Entries=ISV.MobTable,Now=time,Spawn=task.spawn,
+    Stopped=function()return KillSwitch or ScriptUnloaded end,
+    Folder=function()return Workspace:FindFirstChild("Mobs")end,
+    Validate=ValidMob,Count=function(value)IsAliveMobs=value end,
+    ClearTarget=function(mob)
+        if CurrentMob==mob then CurrentMob=nil end
+        if TeleportMob==mob then TeleportMob=nil end
+    end,
+})
+Library:OnUnload(MobRegistry.Stop)
+local RegisterMob=MobRegistry.Register
+                ConnectionTable["ConnectMobCreated"] = Remotes:WaitForChild("Health_InstanceAdded").OnClientEvent:Connect(function(Mob)
+                    -- Folder ChildAdded handles models whose health event arrives before parenting.
                     RegisterMob(Mob)
                 end)
                 ConnectionTable["ConnectMobDied"] = Remotes:WaitForChild("Mobs_MobDied", math.huge).OnClientEvent:Connect(function(Name, Mob)
                     local CheckTable = ISV.MobTable[Mob]
                     if CheckTable then
-                        ISV.MobTable[Mob] = nil
-                        IsAliveMobs -= 1
+                        MobRegistry.Remove(Mob)
+                        
                         if ISV.Debug then
                             
                         end
@@ -32522,7 +33098,7 @@ local registering=setmetatable({},{__mode="k"})
                 while not KillSwitch do
                     if not CanTarget or SV.QuotaPaused then
                         CurrentMob = nil
-                        task.wait()
+                        task.wait(.1)
                         continue
                     end
                     local TableReference = ISV.MobTable
@@ -32534,8 +33110,8 @@ local registering=setmetatable({},{__mode="k"})
 
                     for Mob, AddedTable in TableReference do
                         if not Mob.Parent then
-                            TableReference[Mob] = nil
-                            IsAliveMobs -= 1
+                            MobRegistry.Remove(Mob)
+                            
                             if ISV.Debug then
                                 
                             end
@@ -32543,9 +33119,9 @@ local registering=setmetatable({},{__mode="k"})
                         end
                         local MobHealthProperties = Mob:FindFirstChild("HealthProperties")
                         local MobHealth = MobHealthProperties and MobHealthProperties:FindFirstChild("Health")
-                        if MobHealth and MobHealth.Value == 0 then
-                            TableReference[Mob] = nil
-                            IsAliveMobs -= 1
+                        if MobHealth and MobHealth.Value <= 0 then
+                            MobRegistry.Remove(Mob)
+                            
                             if ISV.Debug then
                                 
                             end
@@ -32593,7 +33169,7 @@ local registering=setmetatable({},{__mode="k"})
                     else
                         CurrentMob = nil
                     end
-                    task.wait()
+                    task.wait(.1)
                 end
             end
         end)
@@ -32661,6 +33237,7 @@ local function RestartDungeon(RestartBypass)
     if not (SV.ReplayMission or SV.DoingGuildDungeon or RestartBypass) then 
         return
     end
+    local replayGeneration=SV.ReplayGeneration
     if SV.TowerChestDelay then
         task.wait(6)
     end
@@ -32673,6 +33250,12 @@ local function RestartDungeon(RestartBypass)
     SV.TransitionPending=true
     Library:Notify("Teleporting...", SV.RestartDungeonDelay)
     task.wait(SV.RestartDungeonDelay)
+    if replayGeneration~=SV.ReplayGeneration then return end
+    if ScriptUnloaded or KillSwitch or SV.QuotaPaused
+        or (not RestartBypass and not(SV.ReplayMission or SV.DoingGuildDungeon))then
+        SV.TransitionPending=nil
+        return
+    end
     if IsTower then
         Difficulty = nil
     end
@@ -32775,6 +33358,11 @@ local function RestartDungeon(RestartBypass)
 end
 
 SetGlobal("collect chests")
+local function WaitBetweenChestRequests()
+    local delay=tonumber(SV.CollectChestsDelay)or .1
+    if delay~=delay then delay=.1 end
+    task.wait(math.clamp(delay,.01,5))
+end
 local function CollectChests()
     local ExtraChestCheck = true
     local ChestDrops = {}
@@ -32795,6 +33383,9 @@ local function CollectChests()
                 break
             end
 
+            if ScriptUnloaded or KillSwitch then break end
+            if ChestIndex>1 then WaitBetweenChestRequests()end
+            if ScriptUnloaded or KillSwitch then break end
             local ChestPrize
             if ChestIndex == 1 then
                 ChestPrize = MissionPrize:InvokeServer(true)
@@ -32828,8 +33419,13 @@ local function CollectTowerChests()
             local OpenChest = Remotes:WaitForChild("Chests_OpenChest", math.huge)
             if SV.CanRequire and debug and getupvalue then
                 local ChestScript = debug.getupvalue(require(Chests).Start, 12)
+                local requested=0
                 for ChestKey, ChestPath in ChestScript do
+                    if ScriptUnloaded or KillSwitch then break end
+                    if requested>0 then WaitBetweenChestRequests()end
+                    if ScriptUnloaded or KillSwitch then break end
                     OpenChest:FireServer(ChestKey)
+                    requested+=1
                 end
             else
                 local ChestNames = {
@@ -32962,25 +33558,35 @@ function Policy.ShouldSell(item,config)
     if item.kind~="Weapon" and item.kind~="Armor" and item.kind~="Pet" and item.kind~="Charm" then return false end
     if item.kind=="Pet" and not config.includePets then return false end
     if item.kind=="Charm" and not config.includeCharms then return false end
-    if type(item.rarity)~="number" or item.rarity==7 then return false end
+    if type(item.rarity)~="number" or item.rarity~=item.rarity or item.rarity%1~=0
+        or item.rarity<1 or item.rarity>=7 then return false end
     local tier=Policy.Tier(config.keepTier)
     if tier==nil then return false end
-    if tier>0 and item.rarity>=tier then return false end
-    if config.keepPerks then
+    local selectedPerks=config.selectedPerks
+    local requiredPerks=config.keepPerks and type(selectedPerks)=="table" and next(selectedPerks)~=nil
+    -- A selected, graded perk is the required keep rule when enabled. Tier-only
+    -- protection is the fallback when no perk filter is active. Perk protection
+    -- remains independent of tier, including the None selection.
+    if not requiredPerks then return not(tier>0 and item.rarity>=tier)end
+    if item.perks~=nil and type(item.perks)~="table"then return false end
+    if requiredPerks then
         for name,value in pairs(item.perks or {}) do
-            local selected=(config.selectedPerks or {})[name]
+            local selected=selectedPerks[name]
             if selected then
+                if type(selected)~="table"then return false end
                 local pet=item.kind=="Pet" or item.kind=="Charm"
                 local threshold=pet and selected.PetPerkValue or selected.PerkValue
                 local range=selected.Ranges and selected.Ranges[item.kind]
                 if range then threshold=range[selected.LowerMax and 1 or 2]end
                 threshold=tonumber(threshold or selected.PerkValue)
                 value=tonumber(value)
-                if not threshold or not value then return false end
+                if not threshold or not value or threshold~=threshold or value~=value
+                    or math.abs(threshold)==math.huge or math.abs(value)==math.huge then return false end
                 if selected.NegativeActive and value<0 then value=-value end
                 -- Match the native whole-percent perk-grade rounding.
                 value=math.floor(value*100+.5)/100
                 local offset=tonumber(config.offset) or 0
+                if offset~=offset or math.abs(offset)==math.huge or offset<0 then return false end
                 if selected.LowerMax then
                     if value<=threshold+offset then return false end
                 elseif value>=threshold-offset then return false end
@@ -33118,13 +33724,21 @@ local function IsTowerEgg(Item)
 end
 
 SetGlobal("sell item")
-local function SellItem(Item)
+InventoryBusy.Pending=setmetatable({},{__mode="k"})
+local function SellItem(Item,validate)
+    if InventoryBusy.Pending[Item]then return false end
     if not IsInventoryItem(Item) or ProtectedInventoryItem(Item) or Item:FindFirstChild("Count") then return false end
+    InventoryBusy.Pending[Item]=true
     -- Match the game's public client adapter, including item-reference conversion.
     local done,ok,result=false,false,nil
     task.spawn(function()
-        ok,result=GameCall(function()return require(Drops):SellItems(LocalPlayer,{Item})end)
+        ok,result=GameCall(function()
+            if ScriptUnloaded or not IsInventoryItem(Item)or ProtectedInventoryItem(Item)
+                or Item:FindFirstChild("Count")or (validate and not validate())then return false end
+            return require(Drops):SellItems(LocalPlayer,{Item})
+        end)
         done=true
+        InventoryBusy.Pending[Item]=nil
     end)
     local deadline=os.clock()+8
     repeat task.wait(0.1) until done or ScriptUnloaded or os.clock()>=deadline
@@ -33335,7 +33949,10 @@ local function FindPart(Location, PartData)
 
     local TouchInterest
     if PartData.DescendantCheck then
-        for Index, Part in MainParent:GetDescendants() do
+        local primary=MainParent:IsA("Model")and MainParent.PrimaryPart
+        local primaryTouch=primary and primary:FindFirstChild("TouchInterest")
+        if primaryTouch then MainParent=primary TouchInterest=primaryTouch end
+        for Index, Part in (TouchInterest and {}or MainParent:GetDescendants()) do
             if Part.ClassName == "TouchTransmitter" then
                 MainParent = Part.Parent
                 TouchInterest = Part
@@ -33625,14 +34242,24 @@ function Schedule.Create(environment,server,clock)
         if duration~=duration or duration<0 then duration=0 end
         state.ReadyAt[key]=clock()+duration
     end
-    function controller.Order(attacks,extra)
+    function controller.Dispatch(key,cooldown,delay,callback,...)
+        if not controller.Ready(key)or not controller.Ready("dispatch")then return false end
+        controller.Reserve(key,cooldown)
+        controller.Reserve("dispatch",delay)
+        -- One transient dispatch error must not terminate the entire aura.
+        -- Keep its reservations, so failure cannot cause an immediate retry burst.
+        return pcall(callback,...)
+    end
+    function controller.Order(attacks,extra,distance)
         local now=clock()
         local result={}
         for index,attack in ipairs(attacks)do
             local cooldown=math.max(0,(tonumber(attack.Cooldown)or 0)+(tonumber(extra)or 0))
             if now-(attack.LastUsed or 0)>=cooldown then
                 attack.ReadySince=attack.ReadySince or now
-                result[#result+1]={Attack=attack,Index=index,Score=(now-attack.ReadySince)/math.clamp(cooldown,.2,3)}
+                if distance==nil or (type(attack.Distance)=="number" and distance<=attack.Distance)then
+                    result[#result+1]={Attack=attack,Index=index,Score=(now-attack.ReadySince)/math.clamp(cooldown,.2,3)}
+                end
             else attack.ReadySince=nil end
         end
         table.sort(result,function(a,b)
@@ -33790,8 +34417,13 @@ local function RecycleFromInventory(Method, SelectedItems)
             local RemoveHashTags = string.gsub(StandardizeCommas, "#", "")
             local SplitHexes = string.split(RemoveHashTags, ",")
             for Index, Hex in SplitHexes do
-                if Hex ~= "" and Hex ~= " " then
-                    table.insert(HexesToSave, string.lower(Hex))
+                local normalized=Hex:match("^%s*(.-)%s*$"):lower()
+                if normalized~=""then
+                    if not normalized:match("^%x+$")or #normalized>6 then
+                        Library:Notify("Use hexadecimal color prefixes of 1 to 6 digits; no cosmetics were changed",4)
+                        return
+                    end
+                    table.insert(HexesToSave,normalized)
                 end
             end
         end
@@ -33819,7 +34451,7 @@ local function RecycleFromInventory(Method, SelectedItems)
                 if CheckDye then
                     local GoodDye
                     for Index, Dye in HexesToSave do
-                        if string.match(CheckDye, "^"..Dye) then
+                        if CheckDye:lower():sub(1,#Dye)==Dye:lower() then
                             GoodDye = true
                             break
                         end
@@ -33853,15 +34485,21 @@ local function RecycleFromInventory(Method, SelectedItems)
 end
 
 SetGlobal("item sell check")
-local function ItemSellCheck(item,manual)
+InventoryBusy.Generation=0
+local function ItemSellCheck(item,manual,expectedGeneration)
     if not item or InventoryBusy[item] then return end
     InventoryBusy[item]=true
     SellItemCheck+=1
-    pcall(function()
+    local function cancelled()
+        return ScriptUnloaded or (Library and Library.ProfileLoading)or (not manual and (not Toggles.AutoSellToggle.Value
+            or (expectedGeneration~=nil and expectedGeneration~=InventoryBusy.Generation)))
+    end
+    local ok,deferred=pcall(function()
         if not manual then task.wait(1)end
         local deadline=os.clock()+8
         while EquipInProgress>0 and not ScriptUnloaded and os.clock()<deadline do task.wait(0.1)end
-        if ScriptUnloaded or EquipInProgress>0 or not IsInventoryItem(item) then return end
+        if cancelled()or not IsInventoryItem(item) then return end
+        if EquipInProgress>0 then return true end
         if not manual and not Toggles.AutoSellToggle.Value then return end
         local rarity,expectedPerks=GetRarity(item)
         local metadataDeadline=os.clock()+8
@@ -33877,13 +34515,14 @@ local function ItemSellCheck(item,manual)
                     if range and range[1]>0 and perk.PerkValue.Value==0 then complete=false break end
                 end
                 if complete then break end
-                if ScriptUnloaded or not IsInventoryItem(item)or(not manual and not Toggles.AutoSellToggle.Value)
+                if cancelled()or not IsInventoryItem(item)
                     or os.clock()>=metadataDeadline then return end
                 task.wait(.1)
             until false
         end
         local ref=SV.Items and SV.Items[item.Name]
         local perks={}
+        local observed={}
         if SV.KeepPerks and expectedPerks then
             for index=1,expectedPerks do
                 if not item:FindFirstChild("Perk"..index) then return end
@@ -33893,6 +34532,7 @@ local function ItemSellCheck(item,manual)
             if child.Name:match("^Perk%d+$") then
                 local value=child:FindFirstChild("PerkValue")
                 if not value or child.Value=="" then return end
+                observed[#observed+1]={Child=child,Value=value,Name=child.Value,Roll=value.Value}
                 local prior=perks[child.Value]
                 local selected=SV.SelectedPerks and SV.SelectedPerks[child.Value]
                 local roll=value.Value
@@ -33906,15 +34546,29 @@ local function ItemSellCheck(item,manual)
             protected=ProtectedInventoryItem(item),stackable=item:FindFirstChild("Count")~=nil,
             equipped=not IsInventoryItem(item),towerEgg=IsTowerEgg(item)==true,
         }
-        local config={
+        local function configuration()return {
             keepTier=KeepTier,includePets=SV.IncludePets,includeCharms=SV.IncludeCharms,
             sellTowerEggs=SV.SellTowerEggs,keepPerks=SV.KeepPerks,
             selectedPerks=SV.SelectedPerks,offset=OffsetMax,
-        }
-        if InventoryPolicy.ShouldSell(state,config) and IsInventoryItem(item) and not ProtectedInventoryItem(item) then SellItem(item)end
+        }end
+        local config=configuration()
+        if not cancelled()and InventoryPolicy.ShouldSell(state,config) and IsInventoryItem(item) and not ProtectedInventoryItem(item) then
+            SellItem(item,function()
+                if cancelled()or EquipInProgress~=0 then return false end
+                local current,expected=GetRarity(item)
+                if current~=rarity then return false end
+                if SV.KeepPerks and expected and #observed<expected then return false end
+                for _,row in ipairs(observed)do
+                    if item:FindFirstChild(row.Child.Name)~=row.Child or row.Child.Value~=row.Name
+                        or row.Child:FindFirstChild("PerkValue")~=row.Value or row.Value.Value~=row.Roll then return false end
+                end
+                return InventoryPolicy.ShouldSell(state,configuration())
+            end)
+        end
     end)
     InventoryBusy[item]=nil
     SellItemCheck=math.max(0,SellItemCheck-1)
+    return ok and deferred==true
 end
 
 SetGlobal("check score")
@@ -33995,8 +34649,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.07-r19")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","63190e63bc3f")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.10-r24-rc1")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","cfbebde997f0")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -34026,8 +34680,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | r19",
-    Footer = "Build 2026.11.07-r19",
+    Title = "Larp Zero | rc1",
+    Footer = "Build 2026.11.10-r24-rc1",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -34156,7 +34810,7 @@ SecondTab:AddSlider("DelayAttackSlider", {
     Max = 0.5,
     Rounding = 2,
     Compact = true,
-    Tooltip = "When time is added the script will wait that long between performing attacks. When fighting bosses this setting is ignored completely.",
+    Tooltip = "Minimum delay between attack dispatches, including bosses. Skill cooldowns and the configured added delay still apply.",
     Callback = function(ChangedValue)
         if ChangedValue == 0 then
             DelayAttacks = false
@@ -35118,7 +35772,7 @@ FirstTab:AddDropdown("AutoSellDropdown", {
 })
     FirstTab:AddDivider()
 CreateToggles({
-    { "KeepSelectedPerkToggle", Text = "Keep selected perks", Tooltip = "By default only S+ perks are kept", Tab = FirstTab, AttachedFunction = ToggleValue, FunctionValue = "KeepPerks" }
+    { "KeepSelectedPerkToggle", Text = "Keep selected perks", Tooltip = "With selected perks enabled, only matching perk grades protect items, across all tiers. With no selected perks, Keep tiers applies. S+ grades are required by default.", Tab = FirstTab, AttachedFunction = ToggleValue, FunctionValue = "KeepPerks" }
 })
 local SavePerkTable = {
     ["Gold Hoarder"] = { PerkValue = 0.2, PetPerkValue = 0.2, PerkName = "GoldDrop" },
@@ -35515,25 +36169,33 @@ end -- for unloaded classes tab
 if not SV.InventoryTab then
 SetGlobal("equipment tab function")
 if IsWorld or IsDungeon then
-local AutoSellGeneration=0
 Toggles.AutoSellToggle:OnChanged(function(enabled)
-    AutoSellGeneration+=1
-    local generation=AutoSellGeneration
+    InventoryBusy.Generation+=1
+    local generation=InventoryBusy.Generation
     DisconnectVariable("ConnectInventory")
     DisconnectVariable("ConnectInventoryFields")
     if not enabled then return end
     task.spawn(function()
         local items=ProfileInventory and ProfileInventory:WaitForChild("Items",5)
-        if not items or generation~=AutoSellGeneration or ScriptUnloaded then return end
+        if not items or generation~=InventoryBusy.Generation or ScriptUnloaded then return end
         local watched=setmetatable({},{__mode="k"})
         local queued=setmetatable({},{__mode="k"})
         local function enqueue(item)
             if queued[item]or not watched[item]then return end
             queued[item]=true
             task.delay(.25,function()
-                queued[item]=nil
-                if generation==AutoSellGeneration and not ScriptUnloaded and Toggles.AutoSellToggle.Value
-                    and item.Parent==items then ItemSellCheck(item)end
+                while Library and Library.ProfileLoading and generation==InventoryBusy.Generation
+                    and not ScriptUnloaded and Toggles.AutoSellToggle.Value and item.Parent==items do task.wait(.1)end
+                local recheck=false
+                if generation==InventoryBusy.Generation and not ScriptUnloaded and Toggles.AutoSellToggle.Value
+                    and item.Parent==items then
+                    local profile=Library and Library.ProfileGeneration
+                    local deferred=ItemSellCheck(item,false,generation)
+                    recheck=(deferred==true or (Library and Library.ProfileGeneration~=profile))and item.Parent==items
+                end
+                if recheck then
+                    task.delay(.5,function()queued[item]=nil enqueue(item)end)
+                else queued[item]=nil end
             end)
         end
         ConnectionTable.ConnectInventory=items.ChildAdded:Connect(function(item)
@@ -36046,7 +36708,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.07-r19 [63190e63bc3f]",true)
+cleanSettings:AddLabel("Build: 2026.11.10-r24-rc1 [cfbebde997f0]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -36068,6 +36730,11 @@ local LoadLocalProfile = InstallLocalProfiles(Library, ConfigTab)
 
 task.spawn(function()
     local deadline=os.clock()+90
+    if IsMainMenu then
+        while not Library.GameHandlersReady and not ScriptUnloaded and not KillSwitch and os.clock()<deadline do task.wait(.25)end
+        if Library.GameHandlersReady and not ScriptUnloaded and not KillSwitch then LoadLocalProfile()end
+        return
+    end
     while not ScriptUnloaded and not KillSwitch and os.clock()<deadline do
         local profile=PlayerGui:FindFirstChild("Profile")
         local inventory=profile and profile:FindFirstChild("Inventory")
@@ -36106,7 +36773,6 @@ do
     ConnectionTable.LarpZeroCarryOver=LocalPlayer.OnTeleport:Connect(function(state,placeId)
         if state==Enum.TeleportState.Failed then
             pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",false)
-            Library.CarrySettingsSaved=false
             return
         end
         if state~=Enum.TeleportState.Started
@@ -36115,12 +36781,9 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=4,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=29,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
-        -- Saving preferences must not prevent the native handoff being issued.
-        if not Library.CarrySettingsSaved and type(Library.PrepareTeleportSettings)=="function"then
-            Library.CarrySettingsSaved=pcall(Library.PrepareTeleportSettings)
-        end
+        -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
     cleanSettings:AddLabel(armed and "World Zero hops only / duplicate startup protected"
         or "World Zero hop carry-over unavailable in this executor",true)
@@ -36226,25 +36889,30 @@ if not IsMainMenu then
                     end
                 }
                 repeat
-                    if CombatSchedule.Ready("dispatch") then
-                    for _, Attack in CombatSchedule.Order(Class.Skills,AddedDelay+PlayerPing) do
+                    if CurrentMob and CombatChecks.TargetReady(CurrentMob,ISV.MobTable[CurrentMob])
+                        and not SV.DodgingAttack and not SV.QuotaPaused and not SV.TransitionPending
+                        and PlayerRoot and PlayerRoot.Parent and CombatSchedule.Ready("dispatch") then
+                    local cachedCollider=CurrentMob:FindFirstChild("Collider")
+                    if cachedCollider and cachedCollider:IsA("BasePart")then
+                    local cachedPlayerSurface=PlayerRoot:GetClosestPointOnSurface(cachedCollider.Position)
+                    local cachedMobSurface=cachedCollider:GetClosestPointOnSurface(PlayerRoot.Position)
+                    local cachedDistance=(cachedPlayerSurface-cachedMobSurface).Magnitude
+                    for _, Attack in CombatSchedule.Order(Class.Skills,AddedDelay+PlayerPing,cachedDistance) do
                         if ScriptUnloaded or KillSwitch or not SV.Killaura or generation~=KillauraGeneration then break end
                         if CombatChecks.ManagedBuff(Attack,Toggles.GeneralClassBuffToggle and Toggles.GeneralClassBuffToggle.Value)then
                             Attack.ReadySince=nil
                             continue
                         end
-                        if CurrentMob and CombatChecks.TargetReady(CurrentMob,ISV.MobTable[CurrentMob])
-                            and not SV.DodgingAttack and not SV.QuotaPaused and not SV.TransitionPending then
+                        if CurrentMob then
                             local AttackCooldown = Attack.Cooldown
                             local key=tostring(SV.PlayerClass)..":"..tostring(Attack.Skill)
                             if time() - (Attack.LastUsed or 0) >= AttackCooldown+AddedDelay+PlayerPing and CombatSchedule.Ready(key) and CombatSchedule.Ready("dispatch") then
                                 local AttackType = Attack.Type
-                                local MobCollider = CurrentMob:FindFirstChild("Collider")
+                                local MobCollider = cachedCollider
                                 if MobCollider then
                                     local AttackDistance = Attack.Distance
-                                    local PlayerSurface = PlayerRoot:GetClosestPointOnSurface(MobCollider.Position)
-                                    local MobSurface = MobCollider:GetClosestPointOnSurface(PlayerRoot.Position)
-                                    local Distance = (PlayerSurface - MobSurface).Magnitude
+                                    local MobSurface = cachedMobSurface
+                                    local Distance = cachedDistance
                                     if Distance <= AttackDistance then
                                         if SV.Autofarm and IsBoss then
                                             local TpTime = CurrentMob:GetAttribute("T")
@@ -36255,9 +36923,8 @@ if not IsMainMenu then
                                         local FindAttackType = AttackArgs[AttackType]
                                         if FindAttackType then
                                             if ScriptUnloaded or KillSwitch or not SV.Killaura or generation~=KillauraGeneration then break end
-                                            CombatSchedule.Reserve(key,AttackCooldown+AddedDelay+PlayerPing)
-                                            CombatSchedule.Reserve("dispatch",tonumber(DelayAttacks)or 0)
-                                            FindAttackType(Attack.Skill, MobSurface)
+                                            CombatSchedule.Dispatch(key,AttackCooldown+AddedDelay+PlayerPing,
+                                                tonumber(DelayAttacks)or 0,FindAttackType,Attack.Skill,MobSurface)
                                         else
                                             SV.Killaura = nil
                                             
@@ -36271,6 +36938,7 @@ if not IsMainMenu then
                             end
                         end
                     end
+                    end -- cached collider guard
                     end -- shared dispatch gate
                     task.wait()
                 until not SV.Killaura or generation~=KillauraGeneration
@@ -36329,14 +36997,37 @@ if not IsMainMenu then
         end
     end)
 
+local FarmOffsets=(function()
+-- Effective movement offsets; saved/raw-aura preferences are never overwritten.
+local Offsets={}
+function Offsets.Resolve(x,y,width,native,distanceType)
+    if native then
+        local horizontal=distanceType=="Ranged"and 12 or 3
+        local vertical=distanceType=="Ranged"and 12 or 2
+        x=math.clamp(x,-horizontal,horizontal)
+        y=math.clamp(y,-vertical,vertical)
+    end
+    local radius=x+width/2
+    if math.abs(radius)<.25 then radius=radius<0 and -.25 or .25 end
+    return radius,y
+end
+function Offsets.Rotate(angle,speed,radius)
+    if math.abs(radius)<.001 then return angle end
+    return angle+speed/radius
+end
+return Offsets
+
+end)()
     Toggles.AutoProgressToggle:OnChanged(function(ChangedValue)
+        SV.AutofarmGeneration=(SV.AutofarmGeneration or 0)+1
+        local generation=SV.AutofarmGeneration
         if ChangedValue and SV.SafeMode and not IsDungeon then
             return
         end
 
         local TimeActivated = os.clock()
         AutofarmChanged = CheckForCharacter(TimeActivated)
-        if TimeActivated ~= AutofarmChanged then
+        if TimeActivated ~= AutofarmChanged or generation~=SV.AutofarmGeneration then
             return
         end
 
@@ -36348,9 +37039,13 @@ if not IsMainMenu then
                     PlayerRoot.CanCollide = false
                     local LastCollider
                     local TeleportTween
-                    while SV.Autofarm do
+                    while SV.Autofarm and generation==SV.AutofarmGeneration and not ScriptUnloaded and not KillSwitch do
                         if KillSwitch then
                             break
+                        end
+                        if not PlayerRoot or PlayerRoot.Parent~=LocalPlayer.Character then
+                            if TeleportTween then TeleportTween:Cancel()TeleportTween=nil end
+                            task.wait(.1)continue
                         end
                         if TempStop or HoldForRealTime or EventOverride or SV.QuotaPaused then
                             if TeleportTween then
@@ -36366,10 +37061,10 @@ if not IsMainMenu then
 
                             if MobCollider then
                                 local DistanceFromMob = (PlayerRoot.Position - MobCollider.Position).Magnitude
-                                local PlayerOffset = Xdistance + (MobCollider.Size.X / 2)
-                                RotationAroundMob += MobRotationSpeed / PlayerOffset
+                                local PlayerOffset,PlayerHeight=FarmOffsets.Resolve(Xdistance,Ydistance,MobCollider.Size.X,SV.SafeKillaura,Class and Class.Distance)
+                                RotationAroundMob=FarmOffsets.Rotate(RotationAroundMob,MobRotationSpeed,PlayerOffset)
 
-                                local TargetCFrame = CFrame.new(MobCollider.Position) * CFrame.Angles(0, math.rad(RotationAroundMob), 0) * CFrame.new(PlayerOffset, Ydistance, 0)
+                                local TargetCFrame = CFrame.new(MobCollider.Position) * CFrame.Angles(0, math.rad(RotationAroundMob), 0) * CFrame.new(PlayerOffset, PlayerHeight, 0)
                                 TargetCFrame = CFrame.lookAt(TargetCFrame.Position, Vector3.new(MobCollider.Position.X, TargetCFrame.Position.Y, MobCollider.Position.Z))
 
                                 if MobCollider ~= LastCollider or DistanceFromMob > 200 then
@@ -36381,6 +37076,7 @@ if not IsMainMenu then
                                     PlayerRoot.CFrame = TargetCFrame
                                     LastCollider = MobCollider
                                 else
+                                    if TeleportTween then TeleportTween:Cancel()end
                                     TeleportTween = TweenService:Create(PlayerRoot, TweenInfo.new((PlayerRoot.Position - MobCollider.Position).Magnitude / 70, Enum.EasingStyle.Linear), {CFrame = TargetCFrame})
                                     TeleportTween:Play()
                                 end
@@ -36388,8 +37084,9 @@ if not IsMainMenu then
                                     TeleportMob:SetAttribute("T", time())
                                 end
 
-                                if IsMobCamera and CurrentCamera.CameraSubject ~= TeleportMob then
-                                    CurrentCamera.CameraSubject = TeleportMob
+                                local currentCamera=workspace.CurrentCamera
+                                if IsMobCamera and currentCamera and currentCamera.CameraSubject ~= TeleportMob then
+                                    currentCamera.CameraSubject = TeleportMob
                                 end
                             end
                         else
@@ -36399,8 +37096,9 @@ if not IsMainMenu then
                             end
                         end
                         TeleportStandPart()
-                        task.wait()
+                        task.wait(.05)
                     end
+                    if TeleportTween then TeleportTween:Cancel()end
                 end)
                 if not Success then
                     
@@ -36414,17 +37112,25 @@ if not IsMainMenu then
                             Part.CanCollide = false
                         end
                     end
-                    while SV.Autofarm do
+                    while SV.Autofarm and generation==SV.AutofarmGeneration and not ScriptUnloaded and not KillSwitch do
                         for Part, PartData in TeleportParts do
                             if not SV.StopTeleportingParts and not SV.QuotaPaused then
                                 if PartData.DontTeleport then
                                     continue
                                 end
+                                if PartData.Pending then continue end
                                 if Part.Parent and PartData.TouchPart.Parent then
+                                    PartData.Pending=true
                                     task.spawn(function()
-                                        Part.Position = PlayerRoot.Position
-                                        task.wait(0.1)
-                                        Part.Position = PartData.OriginalLocation
+                                        pcall(function()
+                                            if generation==SV.AutofarmGeneration and SV.Autofarm and not ScriptUnloaded
+                                                and PlayerRoot and PlayerRoot.Parent then
+                                                Part.Position=PlayerRoot.Position
+                                                task.wait(.1)
+                                            end
+                                        end)
+                                        pcall(function()if Part.Parent then Part.Position=PartData.OriginalLocation end end)
+                                        PartData.Pending=nil
                                     end)
                                 else
                                     if not PartData.Regenerates then
@@ -36449,7 +37155,7 @@ if not IsMainMenu then
                         "IceWall", "IgnisShield", "ZeroShield", "ShieldEgg", "EggShield"
                     }
                     if table.find(ShieldDungeons, ISV.MissionId) or SV.PartyRaidID == 14 then
-                        while SV.Autofarm do
+                        while SV.Autofarm and generation==SV.AutofarmGeneration and not ScriptUnloaded and not KillSwitch do
                             for Index, Shield in ShieldNames do
                                 local CheckShield = Workspace:FindFirstChild(Shield)
                                 if CheckShield then
@@ -36465,7 +37171,7 @@ if not IsMainMenu then
                                         local ShieldPosition = Vector3.new(Ring.Position.X, Ring.Position.Y + PlayerSize, Ring.Position.Z)
                                         TempStop = true
                                         CanTarget = false
-                                        while CheckShield.Parent do
+                                        while CheckShield.Parent and SV.Autofarm and generation==SV.AutofarmGeneration and not ScriptUnloaded and not KillSwitch do
                                             PlayerRoot.CFrame = CFrame.new(ShieldPosition)
                                             task.wait()
                                         end
@@ -36485,7 +37191,7 @@ if not IsMainMenu then
             end)
         else
             SV.Autofarm = nil
-            PlayerRoot.CanCollide = true
+            if PlayerRoot and PlayerRoot.Parent then PlayerRoot.CanCollide = true end
             for Part, PartData in TeleportParts do
                 if Part and Part.Parent then
                     Part.Size = PartData.OriginalSize
@@ -36493,7 +37199,7 @@ if not IsMainMenu then
                     Part.Position = PartData.OriginalLocation
                 end
             end
-            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerRoot == SV.PlayerCamera.Parent then
+            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerCharacter and SV.PlayerCamera:IsDescendantOf(PlayerCharacter) then
                 workspace.CurrentCamera.CameraSubject = SV.PlayerCamera
             else
                 workspace.CurrentCamera.CameraSubject = (PlayerCharacter and PlayerCharacter:FindFirstChildOfClass("Humanoid")) or PlayerRoot
@@ -36535,129 +37241,137 @@ if not IsMainMenu then
         end
     end)
 end
+do
+(function()
+return function(NativePetCombat)
 if not IsMainMenu then
-    local PetKillaura
-    local PetKillauraChanged
-    Toggles.PetKillauraToggle:OnChanged(function(ChangedValue)
-        if ChangedValue and SV.SafeMode and not IsDungeon then
+    local controller
+    local initialize
+    local initializing=false
+    Toggles.PetKillauraToggle:OnChanged(function(enabled)
+        if controller then controller.Set(enabled)
+        elseif enabled and initialize then initialize()end
+    end)
+    Library:OnUnload(function()if controller then controller.Stop()end end)
+    initialize=function()
+    if initializing or controller or ScriptUnloaded or KillSwitch then return end
+    initializing=true
+    task.spawn(function()
+    local installed=pcall(function()
+    local petOk,petApi,petTypes,petProfile=GameCall(function()
+        return require(Shared.PetSkills),require(Shared.Pets),require(Shared.Profile)
+    end)
+    if petOk and petApi and petTypes and petProfile then
+        local used
+        local deadline=time()+90
+        repeat
+            if ScriptUnloaded or KillSwitch then return end
+            local ok,value=GameCall(function()return petApi:GetPetSkillUsedSignal()end)
+            if ok and value and type(value.Connect)=="function"then used=value break end
+            task.wait(.25)
+        until time()>=deadline
+        if not used then
+            if not Library.Unloaded then Library:Notify("Native pet skills did not finish initializing; toggle again after the game loads",4)end
             return
         end
- -- use pet skill
-        local TimeActivated = os.clock()
-        PetKillauraChanged = CheckForCharacter(TimeActivated)
-        if TimeActivated ~= PetKillauraChanged then
-            return
-        end
-
-        if ChangedValue then
-            PetKillaura = true
-            if SV.CanRequire then
-                local Success, Result = pcall(function()
-                    local UseSkill = Remotes:WaitForChild("PetSkills_UseSkill", math.huge)
-                    local PetSkill = GetPlayerPet(function() return not PetKillaura end)
-                    if not PetSkill then
-                        PetKillaura = false
-                        Toggles.PetKillauraToggle:SetValue(false)
-                        Library:Notify("Equip a pet with a supported attack skill first", 5)
-                        return
-                    end
-
-                    ConnectionTable["ConnectCharacter"] = PlayerCharacter.ChildAdded:Connect(function(NewChild)
-                        if NewChild.Name == "PetData" then
-                            PetSkill = GetPlayerPet()
-                        end
-                    end)
-
-                    local CAttack = Remotes:WaitForChild("Combat_Attack", math.huge)
-                    local AttackArgs = {
-                        Ranged = function(Skill, AttackPosition)
-                            CAttack:FireServer(Skill, AttackPosition, nil, AntiCheatNumber)
-                        end,
-                        Self = function()
-                            UseSkill:FireServer(PlayerCharacter, PlayerRoot.Position)
-                        end,
-                        MobPosition = function(Skill, AttackPosition)
-                            UseSkill:FireServer(PlayerCharacter, AttackPosition)
-                        end
-                    }
-                    while PetKillaura and not KillSwitch do
-                        for _, Attack in PetSkill.Skills do
-                            if CurrentMob then
-                                local AttackCooldown = Attack.Cooldown
-                                if tick() - (Attack.LastUsed or 0) >= AttackCooldown+AddedDelay then
-                                    local AttackType = Attack.Type
-                                    local MobCollider = CurrentMob:FindFirstChild("Collider")
-                                    if MobCollider then
-                                        local AttackDistance = Attack.Distance
-                                        local PlayerSurface = PlayerRoot:GetClosestPointOnSurface(MobCollider.Position)
-                                        local MobSurface = MobCollider:GetClosestPointOnSurface(PlayerRoot.Position)
-                                        local Distance = (PlayerSurface - MobSurface).Magnitude
-                                        if Distance <= AttackDistance then
-                                            local TpTime = CurrentMob:GetAttribute("T")
-                                            if SV.Autofarm and IsBoss and not (TpTime and TpTime+0.2 < time()) then
-                                                break
-                                            end
-                                            local FindAttackType = AttackArgs[AttackType]
-                                            if FindAttackType then
-                                                FindAttackType(Attack.Skill, MobSurface)
-                                            else
-                                                SV.PetKillaura = nil
-                                                
-                                                break
-                                            end
-                                            Attack.LastUsed = tick()
-                                            if DelayPetAttacks then
-                                                task.wait(DelayPetAttacks)
-                                            end
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                        task.wait(.1)
-                    end
-                end)
-                if not Success then
-                    local PetData = PlayerCharacter and PlayerCharacter:FindFirstChild("PetData")
-                    if PetData and PetSkills and SV.CanRequire then
-                        task.wait(.5)
-                        local rPets = require(Pets)
-                        local ItemName = PetData:GetAttribute("ItemName")
-                        local PetName = ReplicatedStorage.PlayerEquips[PlayerName].Pet[ItemName]
-                        local PetRef = rPets:GetPetSkillFromPetRef(PetName)
-                        local SkillExists = PetSkills[tostring(PetRef)]
-                        if SkillExists then
-                            SkillExists = "pet skill is supported."
-                        else
-                            SkillExists = "skill data for " ..tostring(PetRef).. " was not found, skill not supported"
-                        end
-                        
-                        return
-                    end
-                    
+        controller=NativePetCombat.Create({
+            Used=used,Now=time,Spawn=task.spawn,Wait=task.wait,
+            Delay=function()return math.max(0,tonumber(AddedDelay)or 0)+math.max(0,tonumber(DelayPetAttacks)or 0)end,
+            Stopped=function()return ScriptUnloaded or KillSwitch end,
+            Resolve=function()
+                if (SV.SafeMode and not IsDungeon)or SV.DodgingAttack or SV.QuotaPaused or SV.TransitionPending then return end
+                local character=LocalPlayer.Character
+                local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+                local root=character and character.PrimaryPart
+                if not root or not root.Parent or not humanoid or humanoid.Health<=0 then return end
+                local target=CurrentMob
+                if not CombatChecks.TargetReady(target,ISV.MobTable[target])then return end
+                local collider=target:FindFirstChild("Collider")or target.PrimaryPart
+                if not collider or not collider:IsA("BasePart")then return end
+                if petTypes:IsPetAbilityLocked(LocalPlayer)then return end
+                local equips=petProfile:GetPlayerEquips(LocalPlayer)
+                local folder=equips and equips:FindFirstChild("Pet")
+                local refs=folder and folder:GetChildren()or {}
+                if #refs~=1 then return end
+                local skill=petTypes:GetPetSkillFromPetRef(refs[1])
+                local data=skill and petApi:GetSkillData(skill)
+                local localPet=petTypes:GetLocalPet(character)
+                if not data or not localPet or not localPet.pos or localPet.usingSkill
+                    or not localPet.model or not localPet.model.PrimaryPart then return end
+                -- Retain the previous aura's 95-stud surface range, including
+                -- the existing ranged-farm height. The native adapter moves the pet.
+                local origin=root:GetClosestPointOnSurface(collider.Position)
+                local point=collider:GetClosestPointOnSurface(root.Position)
+                if (origin-point).Magnitude>95 then return end
+                if SV.Autofarm and IsBoss then
+                    local stamp=target:GetAttribute("T")
+                    if not(stamp and stamp+.2<time())then return end
                 end
-            else
-                local Success, Result = pcall(function()
-                    local UseSkill = Remotes:WaitForChild("PetSkills_UseSkill", math.huge)
-                    while PetKillaura and not KillSwitch do
-                        if CurrentMob then
-                            local MobCollider = CurrentMob:FindFirstChild("Collider", true)
-                            if MobCollider then
-                                UseSkill:FireServer(CurrentMob, MobCollider.Position)
-                            end
-                        end
-                        task.wait(1)
-                    end
-                end)
-                if not Success then
-                    
+                return character,data.NeedsTarget and target or character
+            end,
+            Use=function(character,target)
+                if LocalPlayer.Character==character and character.Parent then
+                    GameCall(function()petApi:UseSkill(LocalPlayer,target)end)
                 end
-            end
-        else
-            DisconnectVariable("ConnectCharacter")
-            PetKillaura = nil
+            end,
+        })
+        if not ScriptUnloaded and not KillSwitch and Toggles.PetKillauraToggle.Value then controller.Set(true)end
+    else
+        if not Library.Unloaded then Library:Notify("Native pet skills are unavailable in this client",4)end
+    end
+    end)
+    initializing=false
+    if not installed and not Library.Unloaded then Library:Notify("Native pet setup unavailable; toggle again after the game loads",4)end
+    end)
+    end
+    initialize()
+end
+end
+
+end)()((function()
+-- Native pet skill adapter. No reconstructed damage calls or cooldown changes.
+local PetCombat={}
+function PetCombat.Create(deps)
+    local generation=0
+    local pending=false
+    local nextAttempt=0
+    local stopped=false
+    local used=deps.Used:Connect(function(cooldown)
+        if type(cooldown)=="number" and cooldown==cooldown and cooldown>=0 and cooldown<math.huge then
+            nextAttempt=math.max(nextAttempt,deps.Now()+cooldown+math.max(0,deps.Delay()))
         end
     end)
+    local controller={}
+    function controller.Set(enabled)
+        generation+=1
+        if not enabled or stopped then return end
+        local current=generation
+        deps.Spawn(function()
+            while not stopped and current==generation and not deps.Stopped()do
+                if not pending and deps.Now()>=nextAttempt then
+                    local ok,character,target=pcall(deps.Resolve)
+                    if ok and character and target and current==generation and not stopped and not deps.Stopped()then
+                        pending=true
+                        nextAttempt=deps.Now()+.5 -- Bounded retry if the native adapter declines.
+                        pcall(deps.Use,character,target)
+                        pending=false
+                    end
+                end
+                deps.Wait(.1)
+            end
+        end)
+    end
+    function controller.Stop()
+        stopped=true generation+=1
+        used:Disconnect()
+    end
+    return controller
+end
+return PetCombat
+
+end)())
+end
+if not IsMainMenu then
     local CheckForRejoin
     local RestartChanged
     Toggles.RestartStuckToggle:OnChanged(function(ChangedValue) -- stuck restart
@@ -36801,6 +37515,7 @@ if not IsMainMenu then
                 else
                     ClaimingBattlepass = true
                 end
+                local claimOk=pcall(function()
                 local rBattlepass = require(Battlepass)
                 local RedeemedItem = Remotes:WaitForChild("Battlepass_RedeemedItem", math.huge)
                 local RedeemItem = Remotes:WaitForChild("Battlepass_RedeemItem", math.huge)
@@ -36841,7 +37556,7 @@ if not IsMainMenu then
                         local Rank = Tracks[Track]
                         local NextTier = rBattlepass:FindNextItemTier(Tracks[Track])
                         if Track == 1 and not FreeClaimed then
-                            if Rank == 0 or Rank ~= LastFree then
+                            if Rank ~= LastFree then
                                 ClaimRank(NextTier)
                                 LastFree = Rank
                             else
@@ -36849,7 +37564,7 @@ if not IsMainMenu then
                             end
                         end
                         if Track == 2 and not PaidClaimed then
-                            if Rank == 0 or Rank ~= LastPaid then
+                            if Rank ~= LastPaid then
                                 ClaimRank(NextTier, true)
                                 LastPaid = Rank
                             else
@@ -36860,7 +37575,9 @@ if not IsMainMenu then
                     end
                     task.wait()
                 until (FreeClaimed and PaidClaimed)or ScriptUnloaded or KillSwitch or not Toggles.AutoClaimBattlepass.Value
+                end)
                 ClaimingBattlepass = false
+                if not claimOk then Library:Notify("Battlepass claim unavailable; toggle again to retry",4)end
             else
                 Library:Notify("Your executor doesn't support this option")
             end
@@ -37376,6 +38093,51 @@ task.wait()
 
 if not SV.MiscellaneousTab then -- for unloaded miscellaneous tab
 SetGlobal("misc tab functions")
+local EffectFilters=(function()
+-- Death-only and all-effects filters share DoEffect; reconcile their ownership.
+local Filters={}
+function Filters.Create(effects,hooks)
+    local allBefore,deathBefore
+    local controller={}
+    local function clear(fn)
+        if hooks.CheckHook(fn)then hooks.ClearHook(fn)end
+    end
+    function controller.Set(all,death)
+        all=all==true death=death==true
+        if all~=allBefore then
+            for _,name in ipairs({"MakeProjectile","PlayAt","EmitAt"})do
+                local fn=effects[name]
+                clear(fn)
+                if all then hooks.Hook(fn,hooks.NewClosure(function()end))end
+            end
+        end
+        if all~=allBefore or death~=deathBefore then
+            local fn=effects.DoEffect
+            clear(fn)
+            if all then hooks.Hook(fn,hooks.NewClosure(function()end))
+            elseif death then
+                local original
+                original=hooks.Hook(fn,hooks.NewClosure(function(self,name,...)
+                    if name~="DeathEffect"then return original(self,name,...)end
+                end))
+            end
+        end
+        allBefore,deathBefore=all,death
+    end
+    return controller
+end
+return Filters
+
+end)()
+local combinedEffectFilters
+local function RefreshEffectFilters()
+    if not combinedEffectFilters then
+        combinedEffectFilters=EffectFilters.Create(require(Effects),EF)
+        Library:OnUnload(function()combinedEffectFilters.Set(false,false)end)
+    end
+    combinedEffectFilters.Set(Toggles.PreventEffectsToggle.Value,Toggles.DeathEffectToggle.Value)
+end
+
 if IsDungeon then
     SV.PlayerCamera = Camera.CameraSubject
     local CameraChanged
@@ -37387,6 +38149,7 @@ if IsDungeon then
         end
 
         if ChangedValue then
+            if not IsMobCamera then SV.PlayerCamera=workspace.CurrentCamera.CameraSubject end
             task.spawn(function()
                 Toggles.NoclipCameraToggle:SetValue(true)
             end)
@@ -37394,7 +38157,7 @@ if IsDungeon then
         else
             IsMobCamera = false
             task.wait(.1)
-            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerRoot == SV.PlayerCamera.Parent then
+            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerCharacter and SV.PlayerCamera:IsDescendantOf(PlayerCharacter) then
                 workspace.CurrentCamera.CameraSubject = SV.PlayerCamera
             else
                 workspace.CurrentCamera.CameraSubject = (PlayerCharacter and PlayerCharacter:FindFirstChildOfClass("Humanoid")) or PlayerRoot
@@ -37444,19 +38207,7 @@ if not IsMainMenu then
     Toggles.DeathEffectToggle:OnChanged(function(ChangedValue) -- hide damage flash
         if SV.CanRequire and EF.Hook and EF.ClearHook and EF.NewClosure and EF.CheckHook then
             local Success, Result = pcall(function()
-                local DoEffect = require(Effects).DoEffect
-                if ChangedValue then
-                    local OldFunction
-                    OldFunction = EF.Hook(DoEffect, EF.NewClosure(function(a, Effect, ...)
-                        if Effect == "DeathEffect" then
-                            return
-                        else
-                            return OldFunction(a, Effect, ...)
-                        end
-                    end))
-                else
-                    CreateHookOnFunction(DoEffect, false)
-                end
+                RefreshEffectFilters()
             end)
             if not Success then
                 
@@ -37534,7 +38285,7 @@ if IsDungeon then
         if ChangedValue then
             SV.ShowTime = true
             if IsMissionOver() then
-                Library:Notify("Completed in " ..SV.DungeonCompletionTime)
+                Library:Notify(SV.DungeonCompletionTime and ("Completed in "..SV.DungeonCompletionTime)or "Completion time is unavailable for a run finished before this script loaded",4)
             end
         else
             SV.ShowTime = nil
@@ -37556,22 +38307,66 @@ Toggles.AFKToggle:OnChanged(function(enabled)
     end
 end)
 if IsMainMenu then
-    Toggles.MainMenuPlay:OnChanged(function(ChangedValue)
-        if ChangedValue then
-            if firesignal then
-                local PlayButton = PlayerGui:WaitForChild("MainMenuGui", math.huge):WaitForChild("Main", math.huge):WaitForChild("Play", math.huge):WaitForChild("Play", math.huge)
-                if not ChangedValue then
+(function()
+-- Reuse the game's existing Play button and selected character; never choose a slot.
+return function(toggle,context)
+    local generation=0
+    toggle:OnChanged(function(enabled)
+        generation+=1
+        if not enabled then return end
+        local token=generation
+        context.Spawn(function()
+            local deadline=context.Now()+15
+            local attempted=false
+            while token==generation and toggle.Value and not context.Stopped()do
+                local button=context.Button()
+                if button then
+                    if not context.Activate(button)then
+                        context.Notify("This executor could not activate the game's Play button")
+                        return
+                    end
+                    attempted=true
+                elseif attempted then return
+                elseif context.Now()>=deadline then
+                    context.Notify("Play is not ready; select your existing character and toggle Auto click play again")
                     return
                 end
-                while Toggles.MainMenuPlay.Value and not (KillSwitch or ScriptUnloaded) do
-                    firesignal(PlayButton.MouseButton1Click)
-                    task.wait(.5)
-                end
-            else
-                Library:Notify("Your executor doesn't support this option")
+                context.Wait(1)
             end
-        end
+        end)
     end)
+    context.OnUnload(function()generation+=1 end)
+end
+
+end)()(Toggles.MainMenuPlay,{
+    Spawn=task.spawn,Wait=task.wait,Now=time,
+    Stopped=function()return ScriptUnloaded or KillSwitch end,
+    OnUnload=function(fn)Library:OnUnload(fn)end,
+    Notify=function(message)Library:Notify(message,5)end,
+    Button=function()
+        local gui=PlayerGui:FindFirstChild("MainMenuGui")
+        local main=gui and gui:FindFirstChild("Main")
+        local frame=main and main:FindFirstChild("Play")
+        local button=frame and frame:FindFirstChild("Play")
+        return frame and frame.Visible and button and button:IsA("GuiButton")and button.Visible and button.Active and button or nil
+    end,
+    Activate=function(button)
+        local activated=false
+        if type(getconnections)=="function"then
+            local ok,connections=pcall(getconnections,button.MouseButton1Click)
+            if ok then for _,connection in ipairs(connections)do
+                if connection.Enabled~=false and type(connection.Function)=="function"then
+                    local called=GameCall(connection.Function)
+                    activated=called or activated
+                end
+            end end
+        end
+        if not activated and type(firesignal)=="function"then
+            activated=GameCall(function()firesignal(button.MouseButton1Click)end)
+        end
+        return activated
+    end,
+})
 end
 if IsWorld then
     Toggles.AutoJoinDungeon:OnChanged(function(ChangedValue)
@@ -37607,34 +38402,23 @@ if not IsMainMenu then
             end
         end
     end)
-    Toggles.MobESPToggle:OnChanged(function(ChangedValue) -- mob esp
-        if ChangedValue then
-            for _, Mob in Mobs:GetChildren() do
-                if Mob then
-                    local Highlight = Instance.new("Highlight")
-                    Highlight.Name="LarpZeroMobHighlight"
-                    Highlight.FillTransparency = 0
-                    Highlight.Parent = Mob
-                end
-            end
-            ConnectionTable["ConnectMobFolder"] = Mobs.ChildAdded:Connect(function(NewMob)
-                if NewMob then
-                    local Highlight = Instance.new("Highlight")
-                    Highlight.Name="LarpZeroMobHighlight"
-                    Highlight.FillTransparency = 0
-                    Highlight.Parent = NewMob
-                end
-            end)
-        else
-            DisconnectVariable("ConnectMobFolder")
-            for _, MobFolder in Mobs:GetChildren() do
-                local MobHighlight = MobFolder and MobFolder:FindFirstChild("LarpZeroMobHighlight", true)
-                if MobHighlight then
-                    MobHighlight:Destroy()
-                    MobHighlight = nil
-                end
-            end
+    local function HighlightMob(mob)
+        if not mob or not mob.Parent or mob:FindFirstChild("LarpZeroMobHighlight")then return end
+        local highlight=Instance.new("Highlight")
+        highlight.Name="LarpZeroMobHighlight"
+        highlight.FillTransparency=0
+        highlight.Parent=mob
+    end
+    Toggles.MobESPToggle:OnChanged(function(enabled)
+        DisconnectVariable("ConnectMobFolder")
+        for _,child in ipairs(Mobs:GetDescendants())do
+            if child.Name=="LarpZeroMobHighlight"and child:IsA("Highlight")then child:Destroy()end
         end
+        if not enabled then return end
+        for _,mob in ipairs(Mobs:GetChildren())do HighlightMob(mob)end
+        ConnectionTable.ConnectMobFolder=Mobs.ChildAdded:Connect(function(mob)
+            if not ScriptUnloaded and Toggles.MobESPToggle.Value then HighlightMob(mob)end
+        end)
     end)
     local originalCameraMode
     Toggles.NoclipCameraToggle:OnChanged(function(ChangedValue) -- noclip camera
@@ -37758,18 +38542,7 @@ if not IsMainMenu then
     Toggles.PreventEffectsToggle:OnChanged(function(ChangedValue)
         if SV.CanRequire and EF.Hook and EF.ClearHook and EF.NewClosure and EF.CheckHook then
             local Success, Result = pcall(function()
-                local rEffects = require(Effects)
-                if ChangedValue then
-                    CreateHookOnFunction(rEffects.MakeProjectile, true)
-                    CreateHookOnFunction(rEffects.DoEffect, true)
-                    CreateHookOnFunction(rEffects.PlayAt, true)
-                    CreateHookOnFunction(rEffects.EmitAt, true)
-                else
-                    CreateHookOnFunction(rEffects.MakeProjectile, false)
-                    CreateHookOnFunction(rEffects.DoEffect, false)
-                    CreateHookOnFunction(rEffects.PlayAt, false)
-                    CreateHookOnFunction(rEffects.EmitAt, false)
-                end
+                RefreshEffectFilters()
             end)
             if not Success then
                 
@@ -37867,6 +38640,7 @@ if tradeOk and tradeApi then
     end
 end
 
+Library.GameHandlersReady=true
 SetGlobal("getting mission id")
 if IsDungeon then
     MissionObjects = Workspace:WaitForChild("MissionObjects", math.huge)
@@ -38682,7 +39456,7 @@ function CleanUpScript()
     if DC then
         
         if IsDungeon then
-            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerRoot == SV.PlayerCamera.Parent then
+            if SV.PlayerCamera and SV.PlayerCamera.Parent and PlayerCharacter and SV.PlayerCamera:IsDescendantOf(PlayerCharacter) then
                 Workspace.CurrentCamera.CameraSubject = SV.PlayerCamera
             else
                 Workspace.CurrentCamera.CameraSubject = (PlayerCharacter and PlayerCharacter:FindFirstChildOfClass("Humanoid")) or PlayerRoot
