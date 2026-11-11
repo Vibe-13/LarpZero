@@ -6,7 +6,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=29 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=30 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -31,7 +31,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=29 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=30 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -13432,11 +13432,23 @@ local function ReplayDungeonLoop(Mission, Difficulty)
     SV.ReplayGeneration=(SV.ReplayGeneration or 0)+1
     local generation=SV.ReplayGeneration
     if Library.PrepareTeleportSettings then pcall(Library.PrepareTeleportSettings) end
-    while not ScriptUnloaded and SV.ReplayGeneration==generation do
-        pcall(function()
+    for attempt=1,3 do
+        if ScriptUnloaded or KillSwitch or SV.ReplayGeneration~=generation then break end
+        local sent=pcall(function()
             Remotes:WaitForChild("Teleport_StartRaid",10):FireServer(Mission,Difficulty)
         end)
+        if not sent then break end
         task.wait(10)
+    end
+    -- A rejected/missing teleport must not permanently pause combat and recovery.
+    -- Only the owner can release this transition; an older request cannot clear a newer one.
+    if SV.ReplayGeneration==generation then
+        SV.TransitionPending=nil
+        SV.TransitionMission=nil
+        SV.TransitionDifficulty=nil
+        if not ScriptUnloaded and not KillSwitch then
+            Library:Notify("Dungeon teleport did not complete; farming resumed",4)
+        end
     end
 end
 
@@ -14867,8 +14879,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.10-r24-rc1")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","cfbebde997f0")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r25-rc1")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","79069b9e3e4d")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -14899,7 +14911,7 @@ Toggles = Library.Toggles
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
     Title = "Larp Zero | rc1",
-    Footer = "Build 2026.11.10-r24-rc1",
+    Footer = "Build 2026.11.11-r25-rc1",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -16926,7 +16938,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.10-r24-rc1 [cfbebde997f0]",true)
+cleanSettings:AddLabel("Build: 2026.11.11-r25-rc1 [79069b9e3e4d]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -16991,6 +17003,10 @@ do
     ConnectionTable.LarpZeroCarryOver=LocalPlayer.OnTeleport:Connect(function(state,placeId)
         if state==Enum.TeleportState.Failed then
             pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",false)
+            SV.ReplayGeneration=(SV.ReplayGeneration or 0)+1
+            SV.TransitionPending=nil
+            SV.TransitionMission=nil
+            SV.TransitionDifficulty=nil
             return
         end
         if state~=Enum.TeleportState.Started
@@ -16999,7 +17015,7 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=29,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=30,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
         -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
@@ -33214,11 +33230,23 @@ local function ReplayDungeonLoop(Mission, Difficulty)
     SV.ReplayGeneration=(SV.ReplayGeneration or 0)+1
     local generation=SV.ReplayGeneration
     if Library.PrepareTeleportSettings then pcall(Library.PrepareTeleportSettings) end
-    while not ScriptUnloaded and SV.ReplayGeneration==generation do
-        pcall(function()
+    for attempt=1,3 do
+        if ScriptUnloaded or KillSwitch or SV.ReplayGeneration~=generation then break end
+        local sent=pcall(function()
             Remotes:WaitForChild("Teleport_StartRaid",10):FireServer(Mission,Difficulty)
         end)
+        if not sent then break end
         task.wait(10)
+    end
+    -- A rejected/missing teleport must not permanently pause combat and recovery.
+    -- Only the owner can release this transition; an older request cannot clear a newer one.
+    if SV.ReplayGeneration==generation then
+        SV.TransitionPending=nil
+        SV.TransitionMission=nil
+        SV.TransitionDifficulty=nil
+        if not ScriptUnloaded and not KillSwitch then
+            Library:Notify("Dungeon teleport did not complete; farming resumed",4)
+        end
     end
 end
 
@@ -34649,8 +34677,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.10-r24-rc1")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","cfbebde997f0")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r25-rc1")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","79069b9e3e4d")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -34681,7 +34709,7 @@ Toggles = Library.Toggles
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
     Title = "Larp Zero | rc1",
-    Footer = "Build 2026.11.10-r24-rc1",
+    Footer = "Build 2026.11.11-r25-rc1",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -36708,7 +36736,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.10-r24-rc1 [cfbebde997f0]",true)
+cleanSettings:AddLabel("Build: 2026.11.11-r25-rc1 [79069b9e3e4d]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -36773,6 +36801,10 @@ do
     ConnectionTable.LarpZeroCarryOver=LocalPlayer.OnTeleport:Connect(function(state,placeId)
         if state==Enum.TeleportState.Failed then
             pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",false)
+            SV.ReplayGeneration=(SV.ReplayGeneration or 0)+1
+            SV.TransitionPending=nil
+            SV.TransitionMission=nil
+            SV.TransitionDifficulty=nil
             return
         end
         if state~=Enum.TeleportState.Started
@@ -36781,7 +36813,7 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=29,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=30,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
         -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
