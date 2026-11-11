@@ -6,7 +6,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=30 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=34 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -31,7 +31,7 @@ return function(consume)
     if game.GameId~=985731078 then return false end
     local service=game:GetService("TeleportService")
     local ok,ticket=pcall(service.GetTeleportSetting,service,"LarpZeroCarryV1")
-    if not ok or type(ticket)~="table"or ticket.Version~=30 or ticket.Game~=985731078
+    if not ok or type(ticket)~="table"or ticket.Version~=34 or ticket.Game~=985731078
         or ticket.To~=game.PlaceId or type(ticket.From)~="string"or ticket.From==""
         or ticket.From==game.JobId or type(ticket.At)~="number"then return false end
     local age=os.time()-ticket.At
@@ -13794,11 +13794,11 @@ function Policy.ShouldSell(item,config)
     if tier==nil then return false end
     local selectedPerks=config.selectedPerks
     local requiredPerks=config.keepPerks and type(selectedPerks)=="table" and next(selectedPerks)~=nil
-    -- A selected, graded perk is the required keep rule when enabled. Tier-only
-    -- protection is the fallback when no perk filter is active. Perk protection
-    -- remains independent of tier, including the None selection.
+    -- A kept item must qualify for the selected tier and, when configured,
+    -- a selected perk grade. None intentionally keeps no ordinary tiers.
     if not requiredPerks then return not(tier>0 and item.rarity>=tier)end
     if item.perks~=nil and type(item.perks)~="table"then return false end
+    if tier==0 or item.rarity<tier then return true end
     if requiredPerks then
         for name,value in pairs(item.perks or {}) do
             local selected=selectedPerks[name]
@@ -14429,6 +14429,32 @@ end
 
 local CombatChecks=(function()
 local Checks={}
+function Checks.ConfigureSupport(class,name,definitions,cooldown)
+    -- These three native handlers were inspected; leave other classes unchanged.
+    if name~="MageOfLight" or type(definitions)~="table"then return end
+    local slots={HealCircle="Skill1",Barrier="Skill3",Ultimate="Ultimate"}
+    for _,attack in ipairs(class.Skills)do
+        if typeof(attack.Skill)=="Instance"then
+            local suffix=attack.Skill.Name:match("^Skillset_MageOfLight_(.+)$")
+            local data=slots[suffix]and definitions[slots[suffix]]
+            if data and type(data.Cooldown)=="number"then
+                local ok,value=pcall(cooldown,data.Cooldown)
+                if ok and type(value)=="number"and value==value and value>=0 and value<math.huge then
+                    attack.SupportBaseCooldown=attack.SupportBaseCooldown or attack.Cooldown
+                    attack.Cooldown=math.max(attack.SupportBaseCooldown,value)
+                    attack.RequiresFullEnergy=suffix=="Ultimate"
+                end
+            end
+        end
+    end
+end
+function Checks.SupportReady(attack,character)
+    if not attack.RequiresFullEnergy then return true end
+    local properties=character and character:FindFirstChild("EnergyProperties")
+    local energy=properties and properties:FindFirstChild("Energy")
+    local maximum=properties and properties:FindFirstChild("MaxEnergy")
+    return energy~=nil and maximum~=nil and maximum.Value>0 and energy.Value>=maximum.Value
+end
 function Checks.TargetReady(mob,flags)
     if not mob or not mob.Parent or(flags and flags.Invincible)or mob:GetAttribute("Invincible")==true then return false end
     local properties=mob:FindFirstChild("HealthProperties")
@@ -14564,7 +14590,16 @@ local function GetPlayerClass()
         local x=Options[ranged and "ChangedRangedXSlider" or "ChangedMeleeXSlider"]
         local y=Options[ranged and "ChangedRangedYSlider" or "ChangedMeleeYSlider"]
         if x and y then Xdistance=x.Value Ydistance=y.Value end
-        return BuildAttackData(ClassSkills, SV.PlayerClass)
+        local built=BuildAttackData(ClassSkills, SV.PlayerClass)
+        if SV.PlayerClass=="MageOfLight"then
+            pcall(function()
+                local combat=require(Shared.Combat)
+                CombatChecks.ConfigureSupport(built,SV.PlayerClass,require(Skills)[SV.PlayerClass],function(value)
+                    return combat:GetSkillCooldown(LocalPlayer,value)
+                end)
+            end)
+        end
+        return built
     else
         
     end
@@ -14879,8 +14914,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r25-rc1")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","79069b9e3e4d")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r26-rc4")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","be414dc5027b")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -14910,8 +14945,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | rc1",
-    Footer = "Build 2026.11.11-r25-rc1",
+    Title = "Larp Zero | rc4",
+    Footer = "Build 2026.11.11-r26-rc4",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -16002,7 +16037,7 @@ FirstTab:AddDropdown("AutoSellDropdown", {
 })
     FirstTab:AddDivider()
 CreateToggles({
-    { "KeepSelectedPerkToggle", Text = "Keep selected perks", Tooltip = "With selected perks enabled, only matching perk grades protect items, across all tiers. With no selected perks, Keep tiers applies. S+ grades are required by default.", Tab = FirstTab, AttachedFunction = ToggleValue, FunctionValue = "KeepPerks" }
+    { "KeepSelectedPerkToggle", Text = "Keep selected perks", Tooltip = "Items must meet Keep tiers AND a selected perk grade. None keeps no tiers. Without selected perks, only the tier rule applies. Protected/equipped items remain protected.", Tab = FirstTab, AttachedFunction = ToggleValue, FunctionValue = "KeepPerks" }
 })
 local SavePerkTable = {
     ["Gold Hoarder"] = { PerkValue = 0.2, PetPerkValue = 0.2, PerkName = "GoldDrop" },
@@ -16938,7 +16973,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.11-r25-rc1 [79069b9e3e4d]",true)
+cleanSettings:AddLabel("Build: 2026.11.11-r26-rc4 [be414dc5027b]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -17015,7 +17050,7 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=30,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=34,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
         -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
@@ -17131,8 +17166,15 @@ if not IsMainMenu then
                     local cachedPlayerSurface=PlayerRoot:GetClosestPointOnSurface(cachedCollider.Position)
                     local cachedMobSurface=cachedCollider:GetClosestPointOnSurface(PlayerRoot.Position)
                     local cachedDistance=(cachedPlayerSurface-cachedMobSurface).Magnitude
-                    for _, Attack in CombatSchedule.Order(Class.Skills,AddedDelay+PlayerPing,cachedDistance) do
+                    -- The user's safety delay and latency margin overlap; keep the larger
+                    -- margin instead of charging both after every individual skill.
+                    local cooldownExtra=math.max(AddedDelay,PlayerPing)
+                    for _, Attack in CombatSchedule.Order(Class.Skills,cooldownExtra,cachedDistance) do
                         if ScriptUnloaded or KillSwitch or not SV.Killaura or generation~=KillauraGeneration then break end
+                        if not CombatChecks.SupportReady(Attack,PlayerCharacter)then
+                            Attack.ReadySince=nil
+                            continue
+                        end
                         if CombatChecks.ManagedBuff(Attack,Toggles.GeneralClassBuffToggle and Toggles.GeneralClassBuffToggle.Value)then
                             Attack.ReadySince=nil
                             continue
@@ -17140,7 +17182,7 @@ if not IsMainMenu then
                         if CurrentMob then
                             local AttackCooldown = Attack.Cooldown
                             local key=tostring(SV.PlayerClass)..":"..tostring(Attack.Skill)
-                            if time() - (Attack.LastUsed or 0) >= AttackCooldown+AddedDelay+PlayerPing and CombatSchedule.Ready(key) and CombatSchedule.Ready("dispatch") then
+                            if time() - (Attack.LastUsed or 0) >= AttackCooldown+cooldownExtra and CombatSchedule.Ready(key) and CombatSchedule.Ready("dispatch") then
                                 local AttackType = Attack.Type
                                 local MobCollider = cachedCollider
                                 if MobCollider then
@@ -17157,7 +17199,7 @@ if not IsMainMenu then
                                         local FindAttackType = AttackArgs[AttackType]
                                         if FindAttackType then
                                             if ScriptUnloaded or KillSwitch or not SV.Killaura or generation~=KillauraGeneration then break end
-                                            CombatSchedule.Dispatch(key,AttackCooldown+AddedDelay+PlayerPing,
+                                            CombatSchedule.Dispatch(key,AttackCooldown+cooldownExtra,
                                                 tonumber(DelayAttacks)or 0,FindAttackType,Attack.Skill,MobSurface)
                                         else
                                             SV.Killaura = nil
@@ -33592,11 +33634,11 @@ function Policy.ShouldSell(item,config)
     if tier==nil then return false end
     local selectedPerks=config.selectedPerks
     local requiredPerks=config.keepPerks and type(selectedPerks)=="table" and next(selectedPerks)~=nil
-    -- A selected, graded perk is the required keep rule when enabled. Tier-only
-    -- protection is the fallback when no perk filter is active. Perk protection
-    -- remains independent of tier, including the None selection.
+    -- A kept item must qualify for the selected tier and, when configured,
+    -- a selected perk grade. None intentionally keeps no ordinary tiers.
     if not requiredPerks then return not(tier>0 and item.rarity>=tier)end
     if item.perks~=nil and type(item.perks)~="table"then return false end
+    if tier==0 or item.rarity<tier then return true end
     if requiredPerks then
         for name,value in pairs(item.perks or {}) do
             local selected=selectedPerks[name]
@@ -34227,6 +34269,32 @@ end
 
 local CombatChecks=(function()
 local Checks={}
+function Checks.ConfigureSupport(class,name,definitions,cooldown)
+    -- These three native handlers were inspected; leave other classes unchanged.
+    if name~="MageOfLight" or type(definitions)~="table"then return end
+    local slots={HealCircle="Skill1",Barrier="Skill3",Ultimate="Ultimate"}
+    for _,attack in ipairs(class.Skills)do
+        if typeof(attack.Skill)=="Instance"then
+            local suffix=attack.Skill.Name:match("^Skillset_MageOfLight_(.+)$")
+            local data=slots[suffix]and definitions[slots[suffix]]
+            if data and type(data.Cooldown)=="number"then
+                local ok,value=pcall(cooldown,data.Cooldown)
+                if ok and type(value)=="number"and value==value and value>=0 and value<math.huge then
+                    attack.SupportBaseCooldown=attack.SupportBaseCooldown or attack.Cooldown
+                    attack.Cooldown=math.max(attack.SupportBaseCooldown,value)
+                    attack.RequiresFullEnergy=suffix=="Ultimate"
+                end
+            end
+        end
+    end
+end
+function Checks.SupportReady(attack,character)
+    if not attack.RequiresFullEnergy then return true end
+    local properties=character and character:FindFirstChild("EnergyProperties")
+    local energy=properties and properties:FindFirstChild("Energy")
+    local maximum=properties and properties:FindFirstChild("MaxEnergy")
+    return energy~=nil and maximum~=nil and maximum.Value>0 and energy.Value>=maximum.Value
+end
 function Checks.TargetReady(mob,flags)
     if not mob or not mob.Parent or(flags and flags.Invincible)or mob:GetAttribute("Invincible")==true then return false end
     local properties=mob:FindFirstChild("HealthProperties")
@@ -34362,7 +34430,16 @@ local function GetPlayerClass()
         local x=Options[ranged and "ChangedRangedXSlider" or "ChangedMeleeXSlider"]
         local y=Options[ranged and "ChangedRangedYSlider" or "ChangedMeleeYSlider"]
         if x and y then Xdistance=x.Value Ydistance=y.Value end
-        return BuildAttackData(ClassSkills, SV.PlayerClass)
+        local built=BuildAttackData(ClassSkills, SV.PlayerClass)
+        if SV.PlayerClass=="MageOfLight"then
+            pcall(function()
+                local combat=require(Shared.Combat)
+                CombatChecks.ConfigureSupport(built,SV.PlayerClass,require(Skills)[SV.PlayerClass],function(value)
+                    return combat:GetSkillCooldown(LocalPlayer,value)
+                end)
+            end)
+        end
+        return built
     else
         
     end
@@ -34677,8 +34754,8 @@ Library = BundledUI()
 LarpZeroInstance.Library=Library
 LarpZeroInstance.Loading=false
 Library.ScreenGui:SetAttribute("LarpZeroMenu",true)
-Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r25-rc1")
-Library.ScreenGui:SetAttribute("LarpZeroSourceHash","79069b9e3e4d")
+Library.ScreenGui:SetAttribute("LarpZeroBuild","2026.11.11-r26-rc4")
+Library.ScreenGui:SetAttribute("LarpZeroSourceHash","be414dc5027b")
 if LarpZeroStartupLock then
     LarpZeroStartupLock:SetAttribute("Loading",false)
     local menu=Instance.new("ObjectValue")
@@ -34708,8 +34785,8 @@ Toggles = Library.Toggles
 
 SetGlobal("creating window")
 local Window = Library:CreateWindow({
-    Title = "Larp Zero | rc1",
-    Footer = "Build 2026.11.11-r25-rc1",
+    Title = "Larp Zero | rc4",
+    Footer = "Build 2026.11.11-r26-rc4",
     Icon = 17210785932,
     NotifySide = "Right",
     AutoShow = true,
@@ -35800,7 +35877,7 @@ FirstTab:AddDropdown("AutoSellDropdown", {
 })
     FirstTab:AddDivider()
 CreateToggles({
-    { "KeepSelectedPerkToggle", Text = "Keep selected perks", Tooltip = "With selected perks enabled, only matching perk grades protect items, across all tiers. With no selected perks, Keep tiers applies. S+ grades are required by default.", Tab = FirstTab, AttachedFunction = ToggleValue, FunctionValue = "KeepPerks" }
+    { "KeepSelectedPerkToggle", Text = "Keep selected perks", Tooltip = "Items must meet Keep tiers AND a selected perk grade. None keeps no tiers. Without selected perks, only the tier rule applies. Protected/equipped items remain protected.", Tab = FirstTab, AttachedFunction = ToggleValue, FunctionValue = "KeepPerks" }
 })
 local SavePerkTable = {
     ["Gold Hoarder"] = { PerkValue = 0.2, PetPerkValue = 0.2, PerkName = "GoldDrop" },
@@ -36736,7 +36813,7 @@ end -- for unloaded miscellaneous
 
 local ConfigTab=Window:AddTab({Name="Settings"})
 local cleanSettings=ConfigTab:AddLeftGroupbox("Menu")
-cleanSettings:AddLabel("Build: 2026.11.11-r25-rc1 [79069b9e3e4d]",true)
+cleanSettings:AddLabel("Build: 2026.11.11-r26-rc4 [be414dc5027b]",true)
 local InstallUpdatesLink=(function()
 -- User-requested invite; clipboard action only when the button is clicked.
 return function(group,library)
@@ -36813,7 +36890,7 @@ do
             and state~=Enum.TeleportState.InProgress then return end
         if type(placeId)~="number"or placeId<=0 then return end
         pcall(service.SetTeleportSetting,service,"LarpZeroCarryV1",{
-            Version=30,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
+            Version=34,Game=985731078,From=game.JobId,To=placeId,At=os.time(),
         })
         -- Only an operational one-use ticket crosses the hop; settings are not saved.
     end)
@@ -36929,8 +37006,15 @@ if not IsMainMenu then
                     local cachedPlayerSurface=PlayerRoot:GetClosestPointOnSurface(cachedCollider.Position)
                     local cachedMobSurface=cachedCollider:GetClosestPointOnSurface(PlayerRoot.Position)
                     local cachedDistance=(cachedPlayerSurface-cachedMobSurface).Magnitude
-                    for _, Attack in CombatSchedule.Order(Class.Skills,AddedDelay+PlayerPing,cachedDistance) do
+                    -- The user's safety delay and latency margin overlap; keep the larger
+                    -- margin instead of charging both after every individual skill.
+                    local cooldownExtra=math.max(AddedDelay,PlayerPing)
+                    for _, Attack in CombatSchedule.Order(Class.Skills,cooldownExtra,cachedDistance) do
                         if ScriptUnloaded or KillSwitch or not SV.Killaura or generation~=KillauraGeneration then break end
+                        if not CombatChecks.SupportReady(Attack,PlayerCharacter)then
+                            Attack.ReadySince=nil
+                            continue
+                        end
                         if CombatChecks.ManagedBuff(Attack,Toggles.GeneralClassBuffToggle and Toggles.GeneralClassBuffToggle.Value)then
                             Attack.ReadySince=nil
                             continue
@@ -36938,7 +37022,7 @@ if not IsMainMenu then
                         if CurrentMob then
                             local AttackCooldown = Attack.Cooldown
                             local key=tostring(SV.PlayerClass)..":"..tostring(Attack.Skill)
-                            if time() - (Attack.LastUsed or 0) >= AttackCooldown+AddedDelay+PlayerPing and CombatSchedule.Ready(key) and CombatSchedule.Ready("dispatch") then
+                            if time() - (Attack.LastUsed or 0) >= AttackCooldown+cooldownExtra and CombatSchedule.Ready(key) and CombatSchedule.Ready("dispatch") then
                                 local AttackType = Attack.Type
                                 local MobCollider = cachedCollider
                                 if MobCollider then
@@ -36955,7 +37039,7 @@ if not IsMainMenu then
                                         local FindAttackType = AttackArgs[AttackType]
                                         if FindAttackType then
                                             if ScriptUnloaded or KillSwitch or not SV.Killaura or generation~=KillauraGeneration then break end
-                                            CombatSchedule.Dispatch(key,AttackCooldown+AddedDelay+PlayerPing,
+                                            CombatSchedule.Dispatch(key,AttackCooldown+cooldownExtra,
                                                 tonumber(DelayAttacks)or 0,FindAttackType,Attack.Skill,MobSurface)
                                         else
                                             SV.Killaura = nil
